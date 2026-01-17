@@ -37,7 +37,8 @@ import {
 
 const CODEC_VERSION_V1 = 1;
 const CODEC_VERSION_V2 = 2;
-const LATEST_CODEC_VERSION = CODEC_VERSION_V2;
+const CODEC_VERSION_V3 = 3;
+const LATEST_CODEC_VERSION = CODEC_VERSION_V3;
 
 const DISCORD_MEDIA_HOST = 'media.discordapp.net';
 const DISCORD_CDN_HOST = 'cdn.discordapp.com';
@@ -716,10 +717,589 @@ function getZoneOpacityCodeV2(opacity: number, defaultOpacity: number): number {
     return ZONE_V2_OPACITY_CUSTOM;
 }
 
-export function encodeSceneBinary(scene: Readonly<Scene>): Uint8Array {
+function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) return false;
+    }
+    return true;
+}
+
+function encodeStepKeyframe(objectBytes: readonly Uint8Array[]): Uint8Array {
+    const writer = new ByteWriter();
+    writer.writeUVar(objectBytes.length);
+    for (const bytes of objectBytes) {
+        writer.writeBytes(bytes);
+    }
+    return writer.toUint8Array();
+}
+
+function encodeStepDelta(objectBytes: readonly Uint8Array[], prevObjectBytes: readonly Uint8Array[]): Uint8Array {
+    const writer = new ByteWriter();
+    writer.writeUVar(objectBytes.length);
+
+    let i = 0;
+    while (i < objectBytes.length) {
+        const cur = objectBytes[i];
+        const prev = i < prevObjectBytes.length ? prevObjectBytes[i] : undefined;
+        if (cur && prev && bytesEqual(cur, prev)) {
+            let runLen = 1;
+            while (i + runLen < objectBytes.length && i + runLen < prevObjectBytes.length) {
+                const cur2 = objectBytes[i + runLen];
+                const prev2 = prevObjectBytes[i + runLen];
+                if (!cur2 || !prev2 || !bytesEqual(cur2, prev2)) break;
+                runLen++;
+            }
+
+            // 0 = copy run from previous step
+            writer.writeU8(0);
+            writer.writeUVar(runLen);
+            i += runLen;
+            continue;
+        }
+
+        // 1 = literal object encoding
+        writer.writeU8(1);
+        if (!cur) {
+            throw new Error('Internal error: missing object encoding');
+        }
+        writer.writeBytes(cur);
+        i++;
+    }
+
+    return writer.toUint8Array();
+}
+
+function writeObjectBinary(
+    writer: ByteWriter,
+    obj: SceneObject,
+    table: StringTable,
+    idToIndex: Map<number, number>,
+    version: number,
+): void {
+    const type = obj.type as ObjectType;
+    writer.writeU8(getObjectTypeCode(type));
+
+    const hide = !!(obj as unknown as { hide?: boolean }).hide;
+    const pinned = !!(obj as unknown as { pinned?: boolean }).pinned;
+
+    let flags = 0;
+    if (hide) flags |= FLAG_HIDE;
+    if (pinned) flags |= FLAG_PINNED;
+
+    const defaultOpacity = getDefaultOpacity(type);
+    const opacity = (obj as unknown as { opacity?: number }).opacity ?? defaultOpacity;
+
+    if (type === ObjectType.Party) {
+        const party = obj as unknown as {
+            image: string;
+            name: string;
+            x: number;
+            y: number;
+            rotation?: number;
+            width?: number;
+            height?: number;
+            opacity?: number;
+        };
+
+        const presetKey = `${party.image}\n${party.name}`;
+        const preset = PARTY_PRESET_INDEX.get(presetKey);
+        if (preset !== undefined) flags |= PARTY_FLAG_PRESET;
+
+        if ((party.rotation ?? 0) !== 0) flags |= PARTY_FLAG_ROTATION;
+        if ((party.width ?? DEFAULT_PARTY_SIZE) !== DEFAULT_PARTY_SIZE || (party.height ?? DEFAULT_PARTY_SIZE) !== DEFAULT_PARTY_SIZE)
+            flags |= PARTY_FLAG_SIZE;
+        if (opacity !== defaultOpacity) flags |= PARTY_FLAG_OPACITY;
+
+        writer.writeUVar(flags);
+
+        if (flags & PARTY_FLAG_PRESET) {
+            writer.writeUVar(preset ?? 0);
+        } else {
+            writeStringIndex(writer, table, party.image);
+            writeStringIndex(writer, table, party.name);
+        }
+
+        writer.writeSVar(encodeCoord(party.x));
+        writer.writeSVar(encodeCoord(party.y));
+
+        if (flags & PARTY_FLAG_ROTATION) writer.writeSVar(Math.round(party.rotation ?? 0));
+        if (flags & PARTY_FLAG_SIZE) {
+            writer.writeUVar(Math.round(party.width ?? DEFAULT_PARTY_SIZE));
+            writer.writeUVar(Math.round(party.height ?? DEFAULT_PARTY_SIZE));
+        }
+        if (flags & PARTY_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+        return;
+    }
+
+    if (type === ObjectType.Enemy) {
+        const enemy = obj as unknown as {
+            icon: string;
+            name: string;
+            color: string;
+            radius: number;
+            x: number;
+            y: number;
+            rotation?: number;
+            opacity?: number;
+            ring?: EnemyRingStyle;
+        };
+
+        if (enemy.name) flags |= ENEMY_FLAG_NAME;
+        if ((enemy.rotation ?? 0) !== 0) flags |= ENEMY_FLAG_ROTATION;
+        if (opacity !== defaultOpacity) flags |= ENEMY_FLAG_OPACITY;
+        if ((enemy.ring ?? EnemyRingStyle.Directional) !== EnemyRingStyle.Directional) flags |= ENEMY_FLAG_RING;
+
+        writer.writeUVar(flags);
+        writeStringIndex(writer, table, enemy.icon);
+        if (flags & ENEMY_FLAG_NAME) writeStringIndex(writer, table, enemy.name);
+        writeColor(writer, enemy.color);
+        writer.writeUVar(Math.round(enemy.radius));
+        writer.writeSVar(encodeCoord(enemy.x));
+        writer.writeSVar(encodeCoord(enemy.y));
+        if (flags & ENEMY_FLAG_ROTATION) writer.writeSVar(Math.round(enemy.rotation ?? 0));
+        if (flags & ENEMY_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+        if (flags & ENEMY_FLAG_RING) {
+            const ring = enemy.ring ?? EnemyRingStyle.Directional;
+            writer.writeU8(ring === EnemyRingStyle.NoDirection ? 0 : ring === EnemyRingStyle.Omnidirectional ? 2 : 1);
+        }
+        return;
+    }
+
+    if (type === ObjectType.Text) {
+        const text = obj as unknown as {
+            text: string;
+            x: number;
+            y: number;
+            style: string;
+            align: string;
+            fontSize: number;
+            color: string;
+            stroke: string;
+            rotation?: number;
+            opacity?: number;
+        };
+
+        if (text.style !== DEFAULT_TEXT_STYLE) flags |= TEXT_FLAG_STYLE;
+        if (text.align !== DEFAULT_TEXT_ALIGN) flags |= TEXT_FLAG_ALIGN;
+        if (text.fontSize !== DEFAULT_TEXT_FONT_SIZE) flags |= TEXT_FLAG_FONT_SIZE;
+        if (text.color !== DEFAULT_TEXT_COLOR) flags |= TEXT_FLAG_COLOR;
+        if (opacity !== DEFAULT_OPACITY_TEXT) flags |= TEXT_FLAG_OPACITY;
+        if ((text.rotation ?? 0) !== 0) flags |= TEXT_FLAG_ROTATION;
+        if (text.stroke !== DEFAULT_TEXT_STROKE) flags |= TEXT_FLAG_STROKE;
+
+        writer.writeUVar(flags);
+        writeStringIndex(writer, table, text.text);
+        writer.writeSVar(encodeCoord(text.x));
+        writer.writeSVar(encodeCoord(text.y));
+        if (flags & TEXT_FLAG_STYLE) {
+            writer.writeU8(text.style === 'shadow' ? 1 : text.style === 'plain' ? 2 : 0);
+        }
+        if (flags & TEXT_FLAG_ALIGN) writeStringIndex(writer, table, text.align);
+        if (flags & TEXT_FLAG_FONT_SIZE) writer.writeUVar(Math.round(text.fontSize));
+        if (flags & TEXT_FLAG_COLOR) writeColor(writer, text.color);
+        if (flags & TEXT_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+        if (flags & TEXT_FLAG_ROTATION) writer.writeSVar(Math.round(text.rotation ?? 0));
+        if (flags & TEXT_FLAG_STROKE) writeColor(writer, text.stroke);
+        return;
+    }
+
+    if (type === ObjectType.Tether) {
+        const tether = obj as unknown as {
+            tether: TetherType;
+            startId: number;
+            endId: number;
+            width: number;
+            color: string;
+            opacity?: number;
+        };
+
+        const startIndex = idToIndex.get(tether.startId) ?? 0;
+        const endIndex = idToIndex.get(tether.endId) ?? 0;
+
+        const tetherType = tether.tether ?? TetherType.Line;
+        if (tetherType !== TetherType.Line) flags |= TETHER_FLAG_TYPE;
+        if (tether.width !== DEFAULT_TETHER_WIDTH) flags |= TETHER_FLAG_WIDTH;
+        if (opacity !== DEFAULT_OPACITY_TETHER) flags |= TETHER_FLAG_OPACITY;
+        if (tether.color !== getDefaultTetherColor(tetherType)) flags |= TETHER_FLAG_COLOR;
+
+        writer.writeUVar(flags);
+        writer.writeUVar(startIndex);
+        writer.writeUVar(endIndex);
+
+        if (flags & TETHER_FLAG_TYPE) {
+            writer.writeU8(
+                tetherType === TetherType.Close
+                    ? 1
+                    : tetherType === TetherType.Far
+                      ? 2
+                      : tetherType === TetherType.MinusMinus
+                        ? 3
+                        : tetherType === TetherType.PlusMinus
+                          ? 4
+                          : tetherType === TetherType.PlusPlus
+                            ? 5
+                            : 0,
+            );
+        }
+
+        if (flags & TETHER_FLAG_WIDTH) writer.writeUVar(Math.round(tether.width));
+        if (flags & TETHER_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+        if (flags & TETHER_FLAG_COLOR) writeColor(writer, tether.color);
+        return;
+    }
+
+    if (type === ObjectType.Marker) {
+        const marker = obj as unknown as {
+            name: string;
+            image: string;
+            shape?: string;
+            color: string;
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            rotation: number;
+            opacity?: number;
+        };
+
+        if ((marker.shape ?? DEFAULT_MARKER_SHAPE) !== DEFAULT_MARKER_SHAPE) flags |= MARKER_FLAG_SHAPE;
+        if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= MARKER_FLAG_OPACITY;
+
+        writer.writeUVar(flags);
+        writeStringIndex(writer, table, marker.image);
+        writeStringIndex(writer, table, marker.name);
+        writer.writeSVar(encodeCoord(marker.x));
+        writer.writeSVar(encodeCoord(marker.y));
+        writer.writeUVar(Math.round(marker.width));
+        writer.writeUVar(Math.round(marker.height));
+        writer.writeSVar(Math.round(marker.rotation));
+        if (flags & MARKER_FLAG_SHAPE) writer.writeU8((marker.shape ?? DEFAULT_MARKER_SHAPE) === 'square' ? 1 : 0);
+        writeColor(writer, marker.color);
+        if (flags & MARKER_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+        return;
+    }
+
+    if (type === ObjectType.Icon) {
+        const icon = obj as unknown as {
+            name: string;
+            image: string;
+            iconId?: number;
+            maxStacks?: number;
+            time?: number;
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            rotation: number;
+            opacity?: number;
+        };
+
+        if (icon.width !== DEFAULT_PARTY_SIZE || icon.height !== DEFAULT_PARTY_SIZE) flags |= IMAGE_FLAG_SIZE;
+        if (icon.rotation !== 0) flags |= IMAGE_FLAG_ROTATION;
+        if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= IMAGE_FLAG_OPACITY;
+
+        // iconId/maxStacks/time are optional and not common; store them only if present.
+        if (icon.iconId !== undefined) flags |= 0x10;
+        if (icon.maxStacks !== undefined) flags |= 0x20;
+        if (icon.time !== undefined) flags |= 0x40;
+
+        writer.writeUVar(flags);
+        writeStringIndex(writer, table, icon.image);
+        writeStringIndex(writer, table, icon.name);
+        writer.writeSVar(encodeCoord(icon.x));
+        writer.writeSVar(encodeCoord(icon.y));
+        if (flags & IMAGE_FLAG_SIZE) {
+            writer.writeUVar(Math.round(icon.width));
+            writer.writeUVar(Math.round(icon.height));
+        }
+        if (flags & IMAGE_FLAG_ROTATION) writer.writeSVar(Math.round(icon.rotation));
+        if (flags & IMAGE_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+        if (flags & 0x10) writer.writeUVar(Math.round(icon.iconId ?? 0));
+        if (flags & 0x20) writer.writeUVar(Math.round(icon.maxStacks ?? 0));
+        if (flags & 0x40) writer.writeUVar(Math.round(icon.time ?? 0));
+        return;
+    }
+
+    if (type === ObjectType.Arrow) {
+        const arrow = obj as unknown as {
+            color: string;
+            x: number;
+            y: number;
+            width: number;
+            height: number;
+            rotation: number;
+            opacity?: number;
+            arrowBegin?: boolean;
+            arrowEnd?: boolean;
+        };
+
+        if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= ARROW_FLAG_OPACITY;
+        if (arrow.rotation !== 0) flags |= ARROW_FLAG_ROTATION;
+        if (arrow.arrowEnd) flags |= ARROW_FLAG_END;
+        if (arrow.arrowBegin) flags |= ARROW_FLAG_BEGIN;
+
+        writer.writeUVar(flags);
+        writeColor(writer, arrow.color);
+        writer.writeUVar(Math.round(arrow.width));
+        writer.writeUVar(Math.round(arrow.height));
+        writer.writeSVar(encodeCoord(arrow.x));
+        writer.writeSVar(encodeCoord(arrow.y));
+        if (flags & ARROW_FLAG_ROTATION) writer.writeSVar(Math.round(arrow.rotation));
+        if (flags & ARROW_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+        return;
+    }
+
+    if (type === ObjectType.Draw) {
+        const draw = obj as unknown as DrawObject;
+        // Draw objects contain floats; encode them losslessly as float32.
+        if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= 0x01;
+        if (draw.rotation !== 0) flags |= 0x02;
+
+        writer.writeUVar(flags);
+        writeColor(writer, draw.color);
+        writer.writeF32(draw.x);
+        writer.writeF32(draw.y);
+        writer.writeF32(draw.width);
+        writer.writeF32(draw.height);
+        if (flags & 0x02) writer.writeF32(draw.rotation);
+        writer.writeUVar(draw.points.length);
+        for (const p of draw.points) writer.writeF32(p);
+        writer.writeUVar(Math.round(draw.brushSize));
+        if (flags & 0x01) writer.writeUVar(Math.round(opacity));
+        return;
+    }
+
+    // Zones and other objects
+    const moveable = obj as unknown as { x?: number; y?: number };
+    const rotateable = obj as unknown as { rotation?: number };
+
+    const hollow = !!(obj as unknown as { hollow?: boolean }).hollow;
+    const rotation = rotateable.rotation ?? 0;
+    const opacityInt = Math.round(opacity);
+
+    const supportsV2 = version >= CODEC_VERSION_V2;
+    const zoneOpacityCode = supportsV2 ? getZoneOpacityCodeV2(opacityInt, defaultOpacity) : 0;
+    const shouldWriteZoneOpacity = supportsV2 ? zoneOpacityCode === ZONE_V2_OPACITY_CUSTOM : opacityInt !== defaultOpacity;
+    const shouldWriteZoneRotation = rotation !== 0;
+
+    if (hollow) flags |= ZONE_FLAG_HOLLOW;
+    if (supportsV2) {
+        flags |= (zoneOpacityCode & 0x07) << ZONE_V2_OPACITY_SHIFT;
+        if (shouldWriteZoneRotation) flags |= ZONE_V2_FLAG_ROTATION;
+    } else {
+        if (opacityInt !== defaultOpacity) flags |= ZONE_FLAG_OPACITY;
+        if (shouldWriteZoneRotation) flags |= ZONE_FLAG_ROTATION;
+    }
+
+    writer.writeUVar(flags);
+
+    if (
+        type === ObjectType.Circle ||
+        type === ObjectType.Proximity ||
+        type === ObjectType.Knockback ||
+        type === ObjectType.RotateCW ||
+        type === ObjectType.RotateCCW
+    ) {
+        const circle = obj as unknown as { color: string; radius: number; x: number; y: number };
+        writeColor(writer, circle.color);
+        writer.writeUVar(Math.round(circle.radius));
+        writer.writeSVar(encodeCoord(circle.x));
+        writer.writeSVar(encodeCoord(circle.y));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (type === ObjectType.Donut) {
+        const donut = obj as unknown as { color: string; radius: number; innerRadius: number; x: number; y: number };
+        writeColor(writer, donut.color);
+        writer.writeUVar(Math.round(donut.radius));
+        writer.writeUVar(Math.round(donut.innerRadius));
+        writer.writeSVar(encodeCoord(donut.x));
+        writer.writeSVar(encodeCoord(donut.y));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (type === ObjectType.Eye) {
+        const eye = obj as unknown as { color: string; radius: number; x: number; y: number; invert?: boolean };
+        writer.writeU8(eye.invert ? 1 : 0);
+        writeColor(writer, eye.color);
+        writer.writeUVar(Math.round(eye.radius));
+        writer.writeSVar(encodeCoord(eye.x));
+        writer.writeSVar(encodeCoord(eye.y));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (type === ObjectType.Stack || type === ObjectType.Tower) {
+        const stack = obj as unknown as { color: string; radius: number; count: number; x: number; y: number };
+        writeColor(writer, stack.color);
+        writer.writeUVar(Math.round(stack.radius));
+        writer.writeUVar(Math.round(stack.count));
+        writer.writeSVar(encodeCoord(stack.x));
+        writer.writeSVar(encodeCoord(stack.y));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (type === ObjectType.Line) {
+        const line = obj as unknown as { color: string; length: number; width: number; x: number; y: number; rotation: number };
+        writeColor(writer, line.color);
+        writer.writeUVar(Math.round(line.length));
+        writer.writeUVar(Math.round(line.width));
+        writer.writeSVar(encodeCoord(line.x));
+        writer.writeSVar(encodeCoord(line.y));
+        if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (type === ObjectType.Cone) {
+        const cone = obj as unknown as { color: string; radius: number; coneAngle: number; x: number; y: number; rotation: number };
+        writeColor(writer, cone.color);
+        writer.writeUVar(Math.round(cone.radius));
+        writer.writeUVar(Math.round(cone.coneAngle));
+        writer.writeSVar(encodeCoord(cone.x));
+        writer.writeSVar(encodeCoord(cone.y));
+        if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (type === ObjectType.Arc) {
+        const arc = obj as unknown as {
+            color: string;
+            radius: number;
+            innerRadius: number;
+            coneAngle: number;
+            x: number;
+            y: number;
+            rotation: number;
+        };
+        writeColor(writer, arc.color);
+        writer.writeUVar(Math.round(arc.radius));
+        writer.writeUVar(Math.round(arc.innerRadius));
+        writer.writeUVar(Math.round(arc.coneAngle));
+        writer.writeSVar(encodeCoord(arc.x));
+        writer.writeSVar(encodeCoord(arc.y));
+        if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (
+        type === ObjectType.Rect ||
+        type === ObjectType.LineStack ||
+        type === ObjectType.LineKnockback ||
+        type === ObjectType.LineKnockAway ||
+        type === ObjectType.Triangle ||
+        type === ObjectType.RightTriangle
+    ) {
+        const rect = obj as unknown as { color: string; width: number; height: number; x: number; y: number; rotation: number };
+        writeColor(writer, rect.color);
+        writer.writeUVar(Math.round(rect.width));
+        writer.writeUVar(Math.round(rect.height));
+        writer.writeSVar(encodeCoord(rect.x));
+        writer.writeSVar(encodeCoord(rect.y));
+        if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (type === ObjectType.Polygon) {
+        const poly = obj as unknown as {
+            color: string;
+            radius: number;
+            sides: number;
+            orient?: string;
+            x: number;
+            y: number;
+            rotation: number;
+        };
+        const orient = poly.orient ?? 'point';
+        const orientCode = orient === 'side' ? 1 : 0;
+        writer.writeU8(orientCode);
+        writeColor(writer, poly.color);
+        writer.writeUVar(Math.round(poly.radius));
+        writer.writeUVar(Math.round(poly.sides));
+        writer.writeSVar(encodeCoord(poly.x));
+        writer.writeSVar(encodeCoord(poly.y));
+        if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (type === ObjectType.Exaflare) {
+        const exa = obj as unknown as {
+            color: string;
+            radius: number;
+            length: number;
+            spacing: number;
+            x: number;
+            y: number;
+            rotation: number;
+        };
+        writeColor(writer, exa.color);
+        writer.writeUVar(Math.round(exa.radius));
+        writer.writeUVar(Math.round(exa.length));
+        writer.writeUVar(Math.round(exa.spacing));
+        writer.writeSVar(encodeCoord(exa.x));
+        writer.writeSVar(encodeCoord(exa.y));
+        if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (type === ObjectType.Starburst) {
+        const star = obj as unknown as {
+            color: string;
+            radius: number;
+            spokes: number;
+            spokeWidth: number;
+            x: number;
+            y: number;
+            rotation: number;
+        };
+        writeColor(writer, star.color);
+        writer.writeUVar(Math.round(star.radius));
+        writer.writeUVar(Math.round(star.spokes));
+        writer.writeUVar(Math.round(star.spokeWidth));
+        writer.writeSVar(encodeCoord(star.x));
+        writer.writeSVar(encodeCoord(star.y));
+        if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    if (type === ObjectType.Cursor) {
+        // Minimal cursor object
+        writer.writeSVar(encodeCoord(moveable.x ?? 0));
+        writer.writeSVar(encodeCoord(moveable.y ?? 0));
+        if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+        return;
+    }
+
+    throw new Error(`Unsupported object type: "${type}"`);
+}
+
+function encodeObjectBinary(
+    obj: SceneObject,
+    table: StringTable,
+    idToIndex: Map<number, number>,
+    version: number,
+): Uint8Array {
+    const writer = new ByteWriter();
+    writeObjectBinary(writer, obj, table, idToIndex, version);
+    return writer.toUint8Array();
+}
+
+export function encodeSceneBinary(scene: Readonly<Scene>, version: number = LATEST_CODEC_VERSION): Uint8Array {
     const table = makeStringTable(scene);
 
-    const version = LATEST_CODEC_VERSION;
+    if (version !== CODEC_VERSION_V1 && version !== CODEC_VERSION_V2 && version !== CODEC_VERSION_V3) {
+        throw new Error(`Unsupported plan codec version: ${version}`);
+    }
     const writer = new ByteWriter();
     writer.writeU8(version);
 
@@ -808,7 +1388,37 @@ export function encodeSceneBinary(scene: Readonly<Scene>): Uint8Array {
 
     // Steps
     writer.writeUVar(scene.steps.length);
-    for (const step of scene.steps) {
+    if (version >= CODEC_VERSION_V3) {
+        let prevObjectBytes: Uint8Array[] | undefined;
+        for (let stepIndex = 0; stepIndex < scene.steps.length; stepIndex++) {
+            const step = scene.steps[stepIndex];
+            if (!step) continue;
+            const idToIndex = new Map<number, number>();
+            step.objects.forEach((o, i) => idToIndex.set(o.id, i));
+
+            const objectBytes = step.objects.map((o) => encodeObjectBinary(o, table, idToIndex, version));
+            const keyframe = encodeStepKeyframe(objectBytes);
+
+            if (stepIndex === 0 || !prevObjectBytes) {
+                // 0 = keyframe
+                writer.writeU8(0);
+                writer.writeBytes(keyframe);
+            } else {
+                const delta = encodeStepDelta(objectBytes, prevObjectBytes);
+                if (delta.length < keyframe.length) {
+                    // 1 = delta-from-previous
+                    writer.writeU8(1);
+                    writer.writeBytes(delta);
+                } else {
+                    writer.writeU8(0);
+                    writer.writeBytes(keyframe);
+                }
+            }
+
+            prevObjectBytes = objectBytes;
+        }
+    } else {
+        for (const step of scene.steps) {
         const idToIndex = new Map<number, number>();
         step.objects.forEach((o, i) => idToIndex.set(o.id, i));
 
@@ -1321,6 +1931,7 @@ export function encodeSceneBinary(scene: Readonly<Scene>): Uint8Array {
             throw new Error(`Unsupported object type: "${type}"`);
         }
     }
+    }
 
     return writer.toUint8Array();
 }
@@ -1328,7 +1939,7 @@ export function encodeSceneBinary(scene: Readonly<Scene>): Uint8Array {
 export function decodeSceneBinary(data: Uint8Array): Scene {
     const reader = new ByteReader(data);
     const version = reader.readU8();
-    if (version !== CODEC_VERSION_V1 && version !== CODEC_VERSION_V2) {
+    if (version !== CODEC_VERSION_V1 && version !== CODEC_VERSION_V2 && version !== CODEC_VERSION_V3) {
         throw new Error(`Unsupported plan codec version: ${version}`);
     }
 
@@ -1341,17 +1952,17 @@ export function decodeSceneBinary(data: Uint8Array): Scene {
 
     const readCoordX = (): number => decodeCoord(reader.readSVar());
     const readCoordY = (): number => decodeCoord(reader.readSVar());
-    const isV2 = version === CODEC_VERSION_V2;
+    const supportsV2 = version >= CODEC_VERSION_V2;
 
     const readZoneRotation = (zoneFlags: number): number => {
-        if (isV2) {
+        if (supportsV2) {
             return (zoneFlags & ZONE_V2_FLAG_ROTATION) !== 0 ? reader.readSVar() : 0;
         }
         return (zoneFlags & ZONE_FLAG_ROTATION) !== 0 ? reader.readSVar() : 0;
     };
 
     const readZoneOpacity = (zoneFlags: number, defaultOpacity: number): number => {
-        if (isV2) {
+        if (supportsV2) {
             const code = (zoneFlags & ZONE_V2_OPACITY_MASK) >> ZONE_V2_OPACITY_SHIFT;
             if (code === 0) return defaultOpacity;
             if (code === ZONE_V2_OPACITY_CUSTOM) return reader.readUVar();
@@ -1448,636 +2059,619 @@ export function decodeSceneBinary(data: Uint8Array): Scene {
     const steps: SceneStep[] = [];
 
     let nextId = 1;
+    type TetherPlaceholder = {
+        readonly __tether: true;
+        readonly start: number;
+        readonly end: number;
+        readonly data: Omit<Tether, 'startId' | 'endId'>;
+    };
 
-    for (let stepIndex = 0; stepIndex < stepsCount; stepIndex++) {
-        const objectCount = reader.readUVar();
-        type TetherPlaceholder = {
-            readonly __tether: true;
-            readonly start: number;
-            readonly end: number;
-            readonly data: Omit<Tether, 'startId' | 'endId'>;
-        };
-        const objects: (SceneObject | TetherPlaceholder)[] = [];
+    const readObject = (): SceneObject | TetherPlaceholder => {
+        const type = getObjectTypeFromCode(reader.readU8());
+        const flags = reader.readUVar();
 
-        for (let objectIndex = 0; objectIndex < objectCount; objectIndex++) {
-            const type = getObjectTypeFromCode(reader.readU8());
-            const flags = reader.readUVar();
+        const hide = (flags & FLAG_HIDE) !== 0;
+        const pinned = (flags & FLAG_PINNED) !== 0;
 
-            const hide = (flags & FLAG_HIDE) !== 0;
-            const pinned = (flags & FLAG_PINNED) !== 0;
+        const id = nextId++;
 
-            const id = nextId++;
-
-            if (type === ObjectType.Party) {
-                const hasPreset = (flags & PARTY_FLAG_PRESET) !== 0;
-                let image = '';
-                let name = '';
-                if (hasPreset) {
-                    const presetIndex = reader.readUVar();
-                    const preset = PARTY_PRESETS[presetIndex];
-                    if (preset) {
-                        image = preset.image;
-                        name = preset.name;
-                    }
-                } else {
-                    image = readStringIndex(reader, table);
-                    name = readStringIndex(reader, table);
+        if (type === ObjectType.Party) {
+            const hasPreset = (flags & PARTY_FLAG_PRESET) !== 0;
+            let image = '';
+            let name = '';
+            if (hasPreset) {
+                const presetIndex = reader.readUVar();
+                const preset = PARTY_PRESETS[presetIndex];
+                if (preset) {
+                    image = preset.image;
+                    name = preset.name;
                 }
-
-                const x = readCoordX();
-                const y = readCoordY();
-                const rotation = (flags & PARTY_FLAG_ROTATION) ? reader.readSVar() : 0;
-                const width = (flags & PARTY_FLAG_SIZE) ? reader.readUVar() : DEFAULT_PARTY_SIZE;
-                const height = (flags & PARTY_FLAG_SIZE) ? reader.readUVar() : DEFAULT_PARTY_SIZE;
-                const opacity = (flags & PARTY_FLAG_OPACITY) ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
-
-                const party: PartyObject = {
-                    type,
-                    id,
-                    image,
-                    name,
-                    x,
-                    y,
-                    rotation,
-                    width,
-                    height,
-                    opacity,
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(party);
-                continue;
+            } else {
+                image = readStringIndex(reader, table);
+                name = readStringIndex(reader, table);
             }
 
-            if (type === ObjectType.Enemy) {
-                const icon = readStringIndex(reader, table);
-                const name = (flags & ENEMY_FLAG_NAME) ? readStringIndex(reader, table) : '';
-                const color = readColor(reader);
-                const radius = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const rotation = (flags & ENEMY_FLAG_ROTATION) ? reader.readSVar() : 0;
-                const opacity = (flags & ENEMY_FLAG_OPACITY) ? reader.readUVar() : DEFAULT_OPACITY_ENEMY;
-                const ring =
-                    (flags & ENEMY_FLAG_RING) === 0
-                        ? EnemyRingStyle.Directional
-                        : (() => {
-                              const code = reader.readU8();
-                              return code === 0
-                                  ? EnemyRingStyle.NoDirection
-                                  : code === 2
-                                    ? EnemyRingStyle.Omnidirectional
-                                    : EnemyRingStyle.Directional;
-                          })();
+            const x = readCoordX();
+            const y = readCoordY();
+            const rotation = flags & PARTY_FLAG_ROTATION ? reader.readSVar() : 0;
+            const width = flags & PARTY_FLAG_SIZE ? reader.readUVar() : DEFAULT_PARTY_SIZE;
+            const height = flags & PARTY_FLAG_SIZE ? reader.readUVar() : DEFAULT_PARTY_SIZE;
+            const opacity = flags & PARTY_FLAG_OPACITY ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
 
-                const enemy: EnemyObject = {
-                    type,
-                    id,
-                    icon,
-                    name,
-                    color,
-                    radius,
-                    x,
-                    y,
-                    rotation,
-                    opacity,
-                    ring,
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(enemy);
-                continue;
-            }
-
-            if (type === ObjectType.Text) {
-                const text = readStringIndex(reader, table);
-                const x = readCoordX();
-                const y = readCoordY();
-
-                const style =
-                    (flags & TEXT_FLAG_STYLE) === 0
-                        ? DEFAULT_TEXT_STYLE
-                        : (() => {
-                              const code = reader.readU8();
-                              return code === 1 ? 'shadow' : code === 2 ? 'plain' : 'outline';
-                          })();
-                const align = (flags & TEXT_FLAG_ALIGN) ? readStringIndex(reader, table) : DEFAULT_TEXT_ALIGN;
-                const fontSize = (flags & TEXT_FLAG_FONT_SIZE) ? reader.readUVar() : DEFAULT_TEXT_FONT_SIZE;
-                const color = (flags & TEXT_FLAG_COLOR) ? readColor(reader) : DEFAULT_TEXT_COLOR;
-                const opacity = (flags & TEXT_FLAG_OPACITY) ? reader.readUVar() : DEFAULT_OPACITY_TEXT;
-                const rotation = (flags & TEXT_FLAG_ROTATION) ? reader.readSVar() : 0;
-                const stroke = (flags & TEXT_FLAG_STROKE) ? readColor(reader) : DEFAULT_TEXT_STROKE;
-
-                const textObject: TextObject = {
-                    type,
-                    id,
-                    text,
-                    x,
-                    y,
-                    style,
-                    align,
-                    fontSize,
-                    color,
-                    opacity,
-                    rotation,
-                    stroke,
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(textObject);
-                continue;
-            }
-
-            if (type === ObjectType.Tether) {
-                const start = reader.readUVar();
-                const end = reader.readUVar();
-                const tetherCode = (flags & TETHER_FLAG_TYPE) ? reader.readU8() : 0;
-                const tetherType =
-                    tetherCode === 1
-                        ? TetherType.Close
-                        : tetherCode === 2
-                          ? TetherType.Far
-                          : tetherCode === 3
-                            ? TetherType.MinusMinus
-                            : tetherCode === 4
-                              ? TetherType.PlusMinus
-                              : tetherCode === 5
-                                ? TetherType.PlusPlus
-                                : TetherType.Line;
-
-                const width = (flags & TETHER_FLAG_WIDTH) ? reader.readUVar() : DEFAULT_TETHER_WIDTH;
-                const opacity = (flags & TETHER_FLAG_OPACITY) ? reader.readUVar() : DEFAULT_OPACITY_TETHER;
-                const color = (flags & TETHER_FLAG_COLOR) ? readColor(reader) : getDefaultTetherColor(tetherType);
-
-                const tetherObj: Omit<Tether, 'startId' | 'endId'> = {
-                    type,
-                    id,
-                    tether: tetherType,
-                    width,
-                    opacity,
-                    color,
-                    ...(hide ? { hide } : {}),
-                };
-                objects.push({ __tether: true, start, end, data: tetherObj });
-                continue;
-            }
-
-            if (type === ObjectType.Marker) {
-                const image = readStringIndex(reader, table);
-                const name = readStringIndex(reader, table);
-                const x = readCoordX();
-                const y = readCoordY();
-                const width = reader.readUVar();
-                const height = reader.readUVar();
-                const rotation = reader.readSVar();
-                const shape = (flags & MARKER_FLAG_SHAPE) ? (reader.readU8() === 1 ? 'square' : 'circle') : DEFAULT_MARKER_SHAPE;
-                const color = readColor(reader);
-                const opacity = (flags & MARKER_FLAG_OPACITY) ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
-
-                const marker: MarkerObject = {
-                    type,
-                    id,
-                    image,
-                    name,
-                    x,
-                    y,
-                    width,
-                    height,
-                    rotation,
-                    shape,
-                    color,
-                    opacity,
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(marker);
-                continue;
-            }
-
-            if (type === ObjectType.Icon) {
-                const image = readStringIndex(reader, table);
-                const name = readStringIndex(reader, table);
-                const x = readCoordX();
-                const y = readCoordY();
-                const width = (flags & IMAGE_FLAG_SIZE) ? reader.readUVar() : DEFAULT_PARTY_SIZE;
-                const height = (flags & IMAGE_FLAG_SIZE) ? reader.readUVar() : DEFAULT_PARTY_SIZE;
-                const rotation = (flags & IMAGE_FLAG_ROTATION) ? reader.readSVar() : 0;
-                const opacity = (flags & IMAGE_FLAG_OPACITY) ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
-
-                const iconId = (flags & 0x10) ? reader.readUVar() : undefined;
-                const maxStacks = (flags & 0x20) ? reader.readUVar() : undefined;
-                const time = (flags & 0x40) ? reader.readUVar() : undefined;
-
-                const iconObject: IconObject = {
-                    type,
-                    id,
-                    image,
-                    name,
-                    x,
-                    y,
-                    width,
-                    height,
-                    rotation,
-                    opacity,
-                    iconId,
-                    maxStacks,
-                    time,
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(iconObject);
-                continue;
-            }
-
-            if (type === ObjectType.Arrow) {
-                const color = readColor(reader);
-                const width = reader.readUVar();
-                const height = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const rotation = (flags & ARROW_FLAG_ROTATION) ? reader.readSVar() : 0;
-                const opacity = (flags & ARROW_FLAG_OPACITY) ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
-
-                const arrowObject: ArrowObject = {
-                    type,
-                    id,
-                    color,
-                    width,
-                    height,
-                    x,
-                    y,
-                    rotation,
-                    opacity,
-                    ...(flags & ARROW_FLAG_END ? { arrowEnd: true } : {}),
-                    ...(flags & ARROW_FLAG_BEGIN ? { arrowBegin: true } : {}),
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(arrowObject);
-                continue;
-            }
-
-            if (type === ObjectType.Draw) {
-                const color = readColor(reader);
-                const x = reader.readF32();
-                const y = reader.readF32();
-                const width = reader.readF32();
-                const height = reader.readF32();
-                const rotation = (flags & 0x02) ? reader.readF32() : 0;
-                const pointsLen = reader.readUVar();
-                const points: number[] = [];
-                for (let i = 0; i < pointsLen; i++) points.push(reader.readF32());
-                const brushSize = reader.readUVar();
-                const opacity = (flags & 0x01) ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
-
-                const drawObject: DrawObject = {
-                    type,
-                    id,
-                    color,
-                    x,
-                    y,
-                    width,
-                    height,
-                    rotation,
-                    points,
-                    brushSize,
-                    opacity,
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(drawObject);
-                continue;
-            }
-
-            const defaultOpacity = getDefaultOpacity(type);
-            const zoneFlags = flags;
-            const hollow = (zoneFlags & ZONE_FLAG_HOLLOW) !== 0;
-
-            if (
-                type === ObjectType.Circle ||
-                type === ObjectType.Proximity ||
-                type === ObjectType.Knockback ||
-                type === ObjectType.RotateCW ||
-                type === ObjectType.RotateCCW
-            ) {
-                const color = readColor(reader);
-                const radius = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                const zone: CircleZone = {
-                    type,
-                    id,
-                    color,
-                    radius,
-                    x,
-                    y,
-                    opacity,
-                    ...(hollow ? { hollow: true } : {}),
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(zone);
-                continue;
-            }
-
-            if (type === ObjectType.Donut) {
-                const color = readColor(reader);
-                const radius = reader.readUVar();
-                const innerRadius = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                const donut: DonutZone = {
-                    type,
-                    id,
-                    color,
-                    radius,
-                    innerRadius,
-                    x,
-                    y,
-                    opacity,
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(donut);
-                continue;
-            }
-
-            if (type === ObjectType.Eye) {
-                const invert = reader.readU8() === 1;
-                const color = readColor(reader);
-                const radius = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                const eye: EyeObject = {
-                    type,
-                    id,
-                    color,
-                    radius,
-                    x,
-                    y,
-                    opacity,
-                    ...(hollow ? { hollow: true } : {}),
-                    ...(invert ? { invert: true } : {}),
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(eye);
-                continue;
-            }
-
-            if (type === ObjectType.Stack || type === ObjectType.Tower) {
-                const color = readColor(reader);
-                const radius = reader.readUVar();
-                const count = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                if (type === ObjectType.Stack) {
-                    const stack: StackZone = {
-                        type,
-                        id,
-                        color,
-                        radius,
-                        count,
-                        x,
-                        y,
-                        opacity,
-                        ...(hollow ? { hollow: true } : {}),
-                        ...(hide ? { hide } : {}),
-                        ...(pinned ? { pinned } : {}),
-                    };
-                    objects.push(stack);
-                } else {
-                    const tower: TowerZone = {
-                        type,
-                        id,
-                        color,
-                        radius,
-                        count,
-                        x,
-                        y,
-                        opacity,
-                        ...(hide ? { hide } : {}),
-                        ...(pinned ? { pinned } : {}),
-                    };
-                    objects.push(tower);
-                }
-                continue;
-            }
-
-            if (type === ObjectType.Line) {
-                const color = readColor(reader);
-                const length = reader.readUVar();
-                const width = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const rotation = readZoneRotation(zoneFlags);
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                const line: LineZone = {
-                    type,
-                    id,
-                    color,
-                    length,
-                    width,
-                    x,
-                    y,
-                    rotation,
-                    opacity,
-                    ...(hollow ? { hollow: true } : {}),
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(line);
-                continue;
-            }
-
-            if (type === ObjectType.Cone) {
-                const color = readColor(reader);
-                const radius = reader.readUVar();
-                const coneAngle = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const rotation = readZoneRotation(zoneFlags);
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                const cone: ConeZone = {
-                    type,
-                    id,
-                    color,
-                    radius,
-                    coneAngle,
-                    x,
-                    y,
-                    rotation,
-                    opacity,
-                    ...(hollow ? { hollow: true } : {}),
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(cone);
-                continue;
-            }
-
-            if (type === ObjectType.Arc) {
-                const color = readColor(reader);
-                const radius = reader.readUVar();
-                const innerRadius = reader.readUVar();
-                const coneAngle = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const rotation = readZoneRotation(zoneFlags);
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                const arc: ArcZone = {
-                    type,
-                    id,
-                    color,
-                    radius,
-                    innerRadius,
-                    coneAngle,
-                    x,
-                    y,
-                    rotation,
-                    opacity,
-                    ...(hollow ? { hollow: true } : {}),
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(arc);
-                continue;
-            }
-
-            if (
-                type === ObjectType.Rect ||
-                type === ObjectType.LineStack ||
-                type === ObjectType.LineKnockback ||
-                type === ObjectType.LineKnockAway ||
-                type === ObjectType.Triangle ||
-                type === ObjectType.RightTriangle
-            ) {
-                const color = readColor(reader);
-                const width = reader.readUVar();
-                const height = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const rotation = readZoneRotation(zoneFlags);
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                const rect: RectangleZone = {
-                    type,
-                    id,
-                    color,
-                    width,
-                    height,
-                    x,
-                    y,
-                    rotation,
-                    opacity,
-                    ...(hollow ? { hollow: true } : {}),
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(rect);
-                continue;
-            }
-
-            if (type === ObjectType.Polygon) {
-                const orientCode = reader.readU8();
-                const color = readColor(reader);
-                const radius = reader.readUVar();
-                const sides = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const rotation = readZoneRotation(zoneFlags);
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                const poly: PolygonZone = {
-                    type,
-                    id,
-                    orient: orientCode === 1 ? 'side' : 'point',
-                    color,
-                    radius,
-                    sides,
-                    x,
-                    y,
-                    rotation,
-                    opacity,
-                    ...(hollow ? { hollow: true } : {}),
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(poly);
-                continue;
-            }
-
-            if (type === ObjectType.Exaflare) {
-                const color = readColor(reader);
-                const radius = reader.readUVar();
-                const length = reader.readUVar();
-                const spacing = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const rotation = readZoneRotation(zoneFlags);
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                const exaflare: ExaflareZone = {
-                    type,
-                    id,
-                    color,
-                    radius,
-                    length,
-                    spacing,
-                    x,
-                    y,
-                    rotation,
-                    opacity,
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(exaflare);
-                continue;
-            }
-
-            if (type === ObjectType.Starburst) {
-                const color = readColor(reader);
-                const radius = reader.readUVar();
-                const spokes = reader.readUVar();
-                const spokeWidth = reader.readUVar();
-                const x = readCoordX();
-                const y = readCoordY();
-                const rotation = readZoneRotation(zoneFlags);
-                const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
-                const starburst: StarburstZone = {
-                    type,
-                    id,
-                    color,
-                    radius,
-                    spokes,
-                    spokeWidth,
-                    x,
-                    y,
-                    rotation,
-                    opacity,
-                    ...(hide ? { hide } : {}),
-                    ...(pinned ? { pinned } : {}),
-                };
-                objects.push(starburst);
-                continue;
-            }
-
-            if (type === ObjectType.Cursor) {
-                const x = readCoordX();
-                const y = readCoordY();
-                const opacity = readZoneOpacity(flags, getDefaultOpacity(type));
-                const cursor: FakeCursorObject = { type, id, x, y, opacity, ...(hide ? { hide } : {}), ...(pinned ? { pinned } : {}) };
-                objects.push(cursor);
-                continue;
-            }
-
-            throw new Error(`Unsupported object type: "${type}"`);
+            const party: PartyObject = {
+                type,
+                id,
+                image,
+                name,
+                x,
+                y,
+                rotation,
+                width,
+                height,
+                opacity,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return party;
         }
 
-        // Resolve tethers
+        if (type === ObjectType.Enemy) {
+            const icon = readStringIndex(reader, table);
+            const name = flags & ENEMY_FLAG_NAME ? readStringIndex(reader, table) : '';
+            const color = readColor(reader);
+            const radius = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const rotation = flags & ENEMY_FLAG_ROTATION ? reader.readSVar() : 0;
+            const opacity = flags & ENEMY_FLAG_OPACITY ? reader.readUVar() : DEFAULT_OPACITY_ENEMY;
+            const ring =
+                (flags & ENEMY_FLAG_RING) === 0
+                    ? EnemyRingStyle.Directional
+                    : (() => {
+                          const code = reader.readU8();
+                          return code === 0
+                              ? EnemyRingStyle.NoDirection
+                              : code === 2
+                                ? EnemyRingStyle.Omnidirectional
+                                : EnemyRingStyle.Directional;
+                      })();
+
+            const enemy: EnemyObject = {
+                type,
+                id,
+                icon,
+                name,
+                color,
+                radius,
+                x,
+                y,
+                rotation,
+                opacity,
+                ring,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return enemy;
+        }
+
+        if (type === ObjectType.Text) {
+            const text = readStringIndex(reader, table);
+            const x = readCoordX();
+            const y = readCoordY();
+
+            const style =
+                (flags & TEXT_FLAG_STYLE) === 0
+                    ? DEFAULT_TEXT_STYLE
+                    : (() => {
+                          const code = reader.readU8();
+                          return code === 1 ? 'shadow' : code === 2 ? 'plain' : 'outline';
+                      })();
+            const align = flags & TEXT_FLAG_ALIGN ? readStringIndex(reader, table) : DEFAULT_TEXT_ALIGN;
+            const fontSize = flags & TEXT_FLAG_FONT_SIZE ? reader.readUVar() : DEFAULT_TEXT_FONT_SIZE;
+            const color = flags & TEXT_FLAG_COLOR ? readColor(reader) : DEFAULT_TEXT_COLOR;
+            const opacity = flags & TEXT_FLAG_OPACITY ? reader.readUVar() : DEFAULT_OPACITY_TEXT;
+            const rotation = flags & TEXT_FLAG_ROTATION ? reader.readSVar() : 0;
+            const stroke = flags & TEXT_FLAG_STROKE ? readColor(reader) : DEFAULT_TEXT_STROKE;
+
+            const textObject: TextObject = {
+                type,
+                id,
+                text,
+                x,
+                y,
+                style,
+                align,
+                fontSize,
+                color,
+                opacity,
+                rotation,
+                stroke,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return textObject;
+        }
+
+        if (type === ObjectType.Tether) {
+            const start = reader.readUVar();
+            const end = reader.readUVar();
+            const tetherCode = flags & TETHER_FLAG_TYPE ? reader.readU8() : 0;
+            const tetherType =
+                tetherCode === 1
+                    ? TetherType.Close
+                    : tetherCode === 2
+                      ? TetherType.Far
+                      : tetherCode === 3
+                        ? TetherType.MinusMinus
+                        : tetherCode === 4
+                          ? TetherType.PlusMinus
+                          : tetherCode === 5
+                            ? TetherType.PlusPlus
+                            : TetherType.Line;
+
+            const width = flags & TETHER_FLAG_WIDTH ? reader.readUVar() : DEFAULT_TETHER_WIDTH;
+            const opacity = flags & TETHER_FLAG_OPACITY ? reader.readUVar() : DEFAULT_OPACITY_TETHER;
+            const color = flags & TETHER_FLAG_COLOR ? readColor(reader) : getDefaultTetherColor(tetherType);
+
+            const tetherObj: Omit<Tether, 'startId' | 'endId'> = {
+                type,
+                id,
+                tether: tetherType,
+                width,
+                opacity,
+                color,
+                ...(hide ? { hide } : {}),
+            };
+            return { __tether: true, start, end, data: tetherObj };
+        }
+
+        if (type === ObjectType.Marker) {
+            const image = readStringIndex(reader, table);
+            const name = readStringIndex(reader, table);
+            const x = readCoordX();
+            const y = readCoordY();
+            const width = reader.readUVar();
+            const height = reader.readUVar();
+            const rotation = reader.readSVar();
+            const shape = flags & MARKER_FLAG_SHAPE ? (reader.readU8() === 1 ? 'square' : 'circle') : DEFAULT_MARKER_SHAPE;
+            const color = readColor(reader);
+            const opacity = flags & MARKER_FLAG_OPACITY ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
+
+            const marker: MarkerObject = {
+                type,
+                id,
+                image,
+                name,
+                x,
+                y,
+                width,
+                height,
+                rotation,
+                shape,
+                color,
+                opacity,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return marker;
+        }
+
+        if (type === ObjectType.Icon) {
+            const image = readStringIndex(reader, table);
+            const name = readStringIndex(reader, table);
+            const x = readCoordX();
+            const y = readCoordY();
+            const width = flags & IMAGE_FLAG_SIZE ? reader.readUVar() : DEFAULT_PARTY_SIZE;
+            const height = flags & IMAGE_FLAG_SIZE ? reader.readUVar() : DEFAULT_PARTY_SIZE;
+            const rotation = flags & IMAGE_FLAG_ROTATION ? reader.readSVar() : 0;
+            const opacity = flags & IMAGE_FLAG_OPACITY ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
+
+            const iconId = flags & 0x10 ? reader.readUVar() : undefined;
+            const maxStacks = flags & 0x20 ? reader.readUVar() : undefined;
+            const time = flags & 0x40 ? reader.readUVar() : undefined;
+
+            const iconObject: IconObject = {
+                type,
+                id,
+                image,
+                name,
+                x,
+                y,
+                width,
+                height,
+                rotation,
+                opacity,
+                iconId,
+                maxStacks,
+                time,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return iconObject;
+        }
+
+        if (type === ObjectType.Arrow) {
+            const color = readColor(reader);
+            const width = reader.readUVar();
+            const height = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const rotation = flags & ARROW_FLAG_ROTATION ? reader.readSVar() : 0;
+            const opacity = flags & ARROW_FLAG_OPACITY ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
+
+            const arrowObject: ArrowObject = {
+                type,
+                id,
+                color,
+                width,
+                height,
+                x,
+                y,
+                rotation,
+                opacity,
+                ...(flags & ARROW_FLAG_END ? { arrowEnd: true } : {}),
+                ...(flags & ARROW_FLAG_BEGIN ? { arrowBegin: true } : {}),
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return arrowObject;
+        }
+
+        if (type === ObjectType.Draw) {
+            const color = readColor(reader);
+            const x = reader.readF32();
+            const y = reader.readF32();
+            const width = reader.readF32();
+            const height = reader.readF32();
+            const rotation = flags & 0x02 ? reader.readF32() : 0;
+            const pointsLen = reader.readUVar();
+            const points: number[] = [];
+            for (let i = 0; i < pointsLen; i++) points.push(reader.readF32());
+            const brushSize = reader.readUVar();
+            const opacity = flags & 0x01 ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
+
+            const drawObject: DrawObject = {
+                type,
+                id,
+                color,
+                x,
+                y,
+                width,
+                height,
+                rotation,
+                points,
+                brushSize,
+                opacity,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return drawObject;
+        }
+
+        const defaultOpacity = getDefaultOpacity(type);
+        const zoneFlags = flags;
+        const hollow = (zoneFlags & ZONE_FLAG_HOLLOW) !== 0;
+
+        if (
+            type === ObjectType.Circle ||
+            type === ObjectType.Proximity ||
+            type === ObjectType.Knockback ||
+            type === ObjectType.RotateCW ||
+            type === ObjectType.RotateCCW
+        ) {
+            const color = readColor(reader);
+            const radius = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            const zone: CircleZone = {
+                type,
+                id,
+                color,
+                radius,
+                x,
+                y,
+                opacity,
+                ...(hollow ? { hollow: true } : {}),
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return zone;
+        }
+
+        if (type === ObjectType.Donut) {
+            const color = readColor(reader);
+            const radius = reader.readUVar();
+            const innerRadius = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            const donut: DonutZone = {
+                type,
+                id,
+                color,
+                radius,
+                innerRadius,
+                x,
+                y,
+                opacity,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return donut;
+        }
+
+        if (type === ObjectType.Eye) {
+            const invert = reader.readU8() === 1;
+            const color = readColor(reader);
+            const radius = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            const eye: EyeObject = {
+                type,
+                id,
+                color,
+                radius,
+                x,
+                y,
+                opacity,
+                ...(hollow ? { hollow: true } : {}),
+                ...(invert ? { invert: true } : {}),
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return eye;
+        }
+
+        if (type === ObjectType.Stack || type === ObjectType.Tower) {
+            const color = readColor(reader);
+            const radius = reader.readUVar();
+            const count = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            if (type === ObjectType.Stack) {
+                const stack: StackZone = {
+                    type,
+                    id,
+                    color,
+                    radius,
+                    count,
+                    x,
+                    y,
+                    opacity,
+                    ...(hollow ? { hollow: true } : {}),
+                    ...(hide ? { hide } : {}),
+                    ...(pinned ? { pinned } : {}),
+                };
+                return stack;
+            }
+            const tower: TowerZone = {
+                type,
+                id,
+                color,
+                radius,
+                count,
+                x,
+                y,
+                opacity,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return tower;
+        }
+
+        if (type === ObjectType.Line) {
+            const color = readColor(reader);
+            const length = reader.readUVar();
+            const width = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const rotation = readZoneRotation(zoneFlags);
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            const line: LineZone = {
+                type,
+                id,
+                color,
+                length,
+                width,
+                x,
+                y,
+                rotation,
+                opacity,
+                ...(hollow ? { hollow: true } : {}),
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return line;
+        }
+
+        if (type === ObjectType.Cone) {
+            const color = readColor(reader);
+            const radius = reader.readUVar();
+            const coneAngle = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const rotation = readZoneRotation(zoneFlags);
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            const cone: ConeZone = {
+                type,
+                id,
+                color,
+                radius,
+                coneAngle,
+                x,
+                y,
+                rotation,
+                opacity,
+                ...(hollow ? { hollow: true } : {}),
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return cone;
+        }
+
+        if (type === ObjectType.Arc) {
+            const color = readColor(reader);
+            const radius = reader.readUVar();
+            const innerRadius = reader.readUVar();
+            const coneAngle = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const rotation = readZoneRotation(zoneFlags);
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            const arc: ArcZone = {
+                type,
+                id,
+                color,
+                radius,
+                innerRadius,
+                coneAngle,
+                x,
+                y,
+                rotation,
+                opacity,
+                ...(hollow ? { hollow: true } : {}),
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return arc;
+        }
+
+        if (
+            type === ObjectType.Rect ||
+            type === ObjectType.LineStack ||
+            type === ObjectType.LineKnockback ||
+            type === ObjectType.LineKnockAway ||
+            type === ObjectType.Triangle ||
+            type === ObjectType.RightTriangle
+        ) {
+            const color = readColor(reader);
+            const width = reader.readUVar();
+            const height = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const rotation = readZoneRotation(zoneFlags);
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            const rect: RectangleZone = {
+                type,
+                id,
+                color,
+                width,
+                height,
+                x,
+                y,
+                rotation,
+                opacity,
+                ...(hollow ? { hollow: true } : {}),
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return rect;
+        }
+
+        if (type === ObjectType.Polygon) {
+            const orientCode = reader.readU8();
+            const color = readColor(reader);
+            const radius = reader.readUVar();
+            const sides = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const rotation = readZoneRotation(zoneFlags);
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            const poly: PolygonZone = {
+                type,
+                id,
+                orient: orientCode === 1 ? 'side' : 'point',
+                color,
+                radius,
+                sides,
+                x,
+                y,
+                rotation,
+                opacity,
+                ...(hollow ? { hollow: true } : {}),
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return poly;
+        }
+
+        if (type === ObjectType.Exaflare) {
+            const color = readColor(reader);
+            const radius = reader.readUVar();
+            const length = reader.readUVar();
+            const spacing = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const rotation = readZoneRotation(zoneFlags);
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            const exaflare: ExaflareZone = {
+                type,
+                id,
+                color,
+                radius,
+                length,
+                spacing,
+                x,
+                y,
+                rotation,
+                opacity,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return exaflare;
+        }
+
+        if (type === ObjectType.Starburst) {
+            const color = readColor(reader);
+            const radius = reader.readUVar();
+            const spokes = reader.readUVar();
+            const spokeWidth = reader.readUVar();
+            const x = readCoordX();
+            const y = readCoordY();
+            const rotation = readZoneRotation(zoneFlags);
+            const opacity = readZoneOpacity(zoneFlags, defaultOpacity);
+            const starburst: StarburstZone = {
+                type,
+                id,
+                color,
+                radius,
+                spokes,
+                spokeWidth,
+                x,
+                y,
+                rotation,
+                opacity,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return starburst;
+        }
+
+        if (type === ObjectType.Cursor) {
+            const x = readCoordX();
+            const y = readCoordY();
+            const opacity = readZoneOpacity(flags, getDefaultOpacity(type));
+            const cursor: FakeCursorObject = {
+                type,
+                id,
+                x,
+                y,
+                opacity,
+                ...(hide ? { hide } : {}),
+                ...(pinned ? { pinned } : {}),
+            };
+            return cursor;
+        }
+
+        throw new Error(`Unsupported object type: "${type}"`);
+    };
+
+    const resolveTethers = (objects: readonly (SceneObject | TetherPlaceholder)[]): SceneObject[] => {
         const idsByIndex = objects.map((o) => ('__tether' in o ? o.data.id : o.id));
-        const resolvedObjects: SceneObject[] = objects.map((o) => {
+        return objects.map((o) => {
             if ('__tether' in o) {
                 const startId = idsByIndex[o.start] ?? idsByIndex[0] ?? 1;
                 const endId = idsByIndex[o.end] ?? idsByIndex[0] ?? 1;
@@ -2086,8 +2680,90 @@ export function decodeSceneBinary(data: Uint8Array): Scene {
             }
             return o;
         });
+    };
 
+    const cloneSceneObjectWithNewId = (obj: SceneObject, id: number): SceneObject => {
+        if (obj.type === ObjectType.Draw) {
+            const draw = obj as DrawObject;
+            return { ...draw, id, points: [...draw.points] } as DrawObject;
+        }
+        return { ...obj, id };
+    };
+
+    let prevResolvedObjects: SceneObject[] | undefined;
+    let prevIdToIndex: Map<number, number> | undefined;
+
+    for (let stepIndex = 0; stepIndex < stepsCount; stepIndex++) {
+        const stepMode = version >= CODEC_VERSION_V3 ? reader.readU8() : 0;
+        const objectCount = reader.readUVar();
+
+        const objects: (SceneObject | TetherPlaceholder)[] = [];
+
+        if (version < CODEC_VERSION_V3 || stepMode === 0) {
+            for (let objectIndex = 0; objectIndex < objectCount; objectIndex++) {
+                objects.push(readObject());
+            }
+        } else if (stepMode === 1) {
+            if (!prevResolvedObjects || !prevIdToIndex) {
+                throw new Error('Invalid delta step (missing previous step)');
+            }
+
+            let objectIndex = 0;
+            while (objectIndex < objectCount) {
+                const command = reader.readU8();
+                if (command === 0) {
+                    const runLen = reader.readUVar();
+                    if (runLen <= 0 || objectIndex + runLen > objectCount) {
+                        throw new Error('Invalid delta copy run length');
+                    }
+
+                    for (let j = 0; j < runLen; j++) {
+                        const prev = prevResolvedObjects[objectIndex + j];
+                        if (!prev) {
+                            throw new Error('Invalid delta copy (out of range)');
+                        }
+
+                        const id = nextId++;
+                        if (prev.type === ObjectType.Tether) {
+                            const prevTether = prev as Tether;
+                            const start = prevIdToIndex.get(prevTether.startId) ?? 0;
+                            const end = prevIdToIndex.get(prevTether.endId) ?? 0;
+                            const tetherData: Omit<Tether, 'startId' | 'endId'> = {
+                                type: ObjectType.Tether,
+                                id,
+                                tether: prevTether.tether,
+                                width: prevTether.width,
+                                opacity: prevTether.opacity,
+                                color: prevTether.color,
+                                ...(prevTether.hide ? { hide: true } : {}),
+                            };
+                            objects.push({ __tether: true, start, end, data: tetherData });
+                        } else {
+                            objects.push(cloneSceneObjectWithNewId(prev, id));
+                        }
+                    }
+
+                    objectIndex += runLen;
+                    continue;
+                }
+
+                if (command === 1) {
+                    objects.push(readObject());
+                    objectIndex++;
+                    continue;
+                }
+
+                throw new Error('Invalid delta step command');
+            }
+        } else {
+            throw new Error('Invalid step mode');
+        }
+
+        const resolvedObjects = resolveTethers(objects);
         steps.push({ objects: resolvedObjects });
+
+        prevResolvedObjects = resolvedObjects;
+        prevIdToIndex = new Map<number, number>(resolvedObjects.map((o, i) => [o.id, i]));
     }
 
     return {

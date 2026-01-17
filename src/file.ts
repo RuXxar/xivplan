@@ -57,11 +57,21 @@ export function sceneToText(scene: Readonly<Scene>): string {
     const deflateText = URL_ENCODING_PREFIX + Base64.fromUint8Array(compressed, true);
 
     try {
-        const binary = encodeSceneBinary(scene);
-        const binaryCompressed = brotliCompress(binary, 11);
-        const brotliText = BINARY_ENCODING_PREFIX + Base64.fromUint8Array(binaryCompressed, true);
+        const brotliCandidates: string[] = [];
 
-        return brotliText.length < deflateText.length ? brotliText : deflateText;
+        for (const version of [3, 2]) {
+            try {
+                const binary = encodeSceneBinary(scene, version);
+                const binaryCompressed = brotliCompress(binary, 11);
+                brotliCandidates.push(BINARY_ENCODING_PREFIX + Base64.fromUint8Array(binaryCompressed, true));
+            } catch (ex) {
+                console.warn(`Failed to brotli-compress plan (codec v${version}), skipping.`, ex);
+            }
+        }
+
+        const brotliText = brotliCandidates.reduce((best, s) => (best === '' || s.length < best.length ? s : best), '');
+
+        return brotliText && brotliText.length < deflateText.length ? brotliText : deflateText;
     } catch (ex) {
         console.warn('Failed to brotli-compress plan for URL sharing, falling back to deflate.', ex);
         return deflateText;
