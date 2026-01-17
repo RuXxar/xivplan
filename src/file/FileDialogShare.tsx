@@ -40,7 +40,7 @@ export const ImportFromString: React.FC<ImportFromStringProps> = ({ actions }) =
             }
         }
 
-        const scene = decodeScene(data);
+        const scene = await decodeScene(data);
         if (!scene) {
             setError('Invalid link');
             return;
@@ -84,13 +84,28 @@ export const ImportFromString: React.FC<ImportFromStringProps> = ({ actions }) =
     );
 };
 
-function decodeScene(text: string): Scene | undefined {
+async function decodeScene(text: string): Promise<Scene | undefined> {
     try {
-        return parseSceneLink(new URL(text));
+        const url = new URL(text);
+
+        const direct = parseSceneLink(url);
+        if (direct) {
+            return direct;
+        }
+
+        // Hosted short links are formatted as /#s/<id> and require fetching.
+        const hostedPrefix = '#s/';
+        if (url.hash.startsWith(hostedPrefix)) {
+            const id = decodeURIComponent(url.hash.substring(hostedPrefix.length));
+            const response = await fetch(new URL(`/api/share/${encodeURIComponent(id)}`, url));
+            if (response.ok) {
+                const data = await response.text();
+                return textToScene(data);
+            }
+        }
     } catch (ex) {
         if (!(ex instanceof TypeError)) {
             console.error('Invalid plan data', ex);
-            return undefined;
         }
     }
 

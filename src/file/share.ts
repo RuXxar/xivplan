@@ -9,6 +9,34 @@ export function getShareLink(scene: Scene): string {
     return `${location.protocol}//${location.host}${path}#${data}`;
 }
 
+const HOSTED_PLAN_PREFIX = '#s/';
+
+export function getHostedShareLink(id: string): string {
+    const path = location.pathname === '/' ? '' : location.pathname;
+    return `${location.protocol}//${location.host}${path}${HOSTED_PLAN_PREFIX}${encodeURIComponent(id)}`;
+}
+
+export async function createHostedShareLink(scene: Scene): Promise<string> {
+    const data = sceneToText(scene);
+
+    const response = await fetch('/api/share', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ data }),
+    });
+
+    if (!response.ok) {
+        throw new Error(`Failed to create hosted link: ${response.status}`);
+    }
+
+    const body = (await response.json()) as { id?: string };
+    if (!body.id || typeof body.id !== 'string') {
+        throw new Error('Invalid response from share API');
+    }
+
+    return getHostedShareLink(body.id);
+}
+
 const PLAN_PREFIX = '#/plan/';
 const SHORT_PLAN_PREFIX = '#~';
 
@@ -29,6 +57,13 @@ function getPlanData(hash: string, searchParams?: URLSearchParams): string | und
         return data;
     }
 
+    return undefined;
+}
+
+function getHostedPlanId(hash: string): string | undefined {
+    if (hash.startsWith(HOSTED_PLAN_PREFIX)) {
+        return decodeURIComponent(hash.substring(HOSTED_PLAN_PREFIX.length));
+    }
     return undefined;
 }
 
@@ -54,6 +89,15 @@ export async function fetchScene(url: string) {
     return jsonToScene(data);
 }
 
+async function fetchHostedScene(id: string): Promise<Scene> {
+    const response = await fetch(`/api/share/${encodeURIComponent(id)}`);
+    if (!response.ok) {
+        throw new Error(`Failed to fetch hosted plan: ${response.status}`);
+    }
+    const data = await response.text();
+    return textToScene(data);
+}
+
 let urlCache = '';
 let scenePromise: Promise<Scene | undefined> | undefined;
 let sceneError: Error | string | unknown | undefined;
@@ -72,6 +116,24 @@ function getFetchScenePromise(url: string): Promise<Scene | undefined> {
     });
 
     return scenePromise;
+}
+
+let hostedIdCache = '';
+let hostedPromise: Promise<Scene | undefined> | undefined;
+
+function getFetchHostedScenePromise(id: string): Promise<Scene | undefined> {
+    if (id === hostedIdCache && hostedPromise) {
+        return hostedPromise;
+    }
+
+    hostedIdCache = id;
+    hostedPromise = fetchHostedScene(id).catch((ex) => {
+        console.error(`Failed to read hosted plan "${id}"`, ex);
+        sceneError = ex;
+        return undefined;
+    });
+
+    return hostedPromise;
 }
 
 /**
@@ -98,6 +160,11 @@ export function useSceneFromUrl(): Scene | undefined {
 
     if (scene) {
         return scene;
+    }
+
+    const hostedId = getHostedPlanId(hash);
+    if (hostedId) {
+        return use(getFetchHostedScenePromise(hostedId));
     }
 
     const url = searchParams.get('url');

@@ -22,11 +22,24 @@ At the top of the view, you can add new steps to the plan and switch between ste
 
 All plans are stored locally on your PC. If you are using a Chromium-based browser, you can save directly to files on your PC. Otherwise, you can use browser storage. If using browser storage, be sure not to clear browsing data for this site, or you will lose all your plans!
 
-Using local storage means I don't have to pay for servers, and I can't mess up and accidentally delete your plans, but sharing plans is more difficult. Click the **Share** button at the top to get a sharable link. The entire plan file is encoded in the link, so if it is too large to share, you can also download the plan as an .xivplan file and share that. To open a shared file, simply drag and drop it onto the page.
+Using local storage means I don't have to pay for servers, and I can't mess up and accidentally delete your plans, but sharing plans is more difficult. Click the **Share** button at the top to get a sharable link. By default the plan is encoded directly into the URL (compressed), so if it is too large to share, you can also download the plan as an .xivplan file and share that. To open a shared file, simply drag and drop it onto the page.
 
 If you are using a Chromium-based browser and you install the site as an app, then .xivplan files can also be opened directly in the app instead of using drag and drop.
 
 You can also self-host plans. XIVPlan can fetch an .xivplan file from any public URL if you navigate to `https://xivplan.netlify.app/?url=` followed by the link to the plan. Make sure that you are serving the raw JSON file or it will fail to load.
+
+#### Optional: Hosted Short Links (Cloudflare Pages + KV)
+
+This repo includes an optional short-link backend designed for Cloudflare Pages Functions. It stores the compressed plan payload in a Cloudflare KV namespace and returns a stable ID based on the plan contents (saving the same plan twice returns the same ID).
+
+To enable it:
+
+1. Create a Cloudflare Pages project from your GitHub repo (Cloudflare can auto-deploy on every push; GitHub Actions are optional).
+2. Set the build command to `npm ci && npm run build` and the output directory to `dist`.
+3. Create a KV namespace and add a Pages KV binding named `PLANS`.
+4. (Optional) Add `PLAN_TTL_SECONDS` as an environment variable (defaults to 1 year).
+
+After that, the Share dialog will be able to create `#s/<id>` hosted links via `/api/share`.
 
 ### Background Images
 

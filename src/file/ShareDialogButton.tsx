@@ -16,13 +16,13 @@ import {
     useToastController,
 } from '@fluentui/react-components';
 import { CopyRegular, ShareRegular } from '@fluentui/react-icons';
-import React, { ReactNode, useMemo, useState } from 'react';
+import React, { ReactNode, useEffect, useMemo, useState } from 'react';
 import { CollapsableToolbarButton } from '../CollapsableToolbarButton';
 import { HotkeyBlockingDialogBody } from '../HotkeyBlockingDialogBody';
 import { useScene } from '../SceneProvider';
 import { Scene, SceneStep } from '../scene';
 import { DownloadButton } from './DownloadButton';
-import { getShareLink } from './share';
+import { createHostedShareLink, getShareLink } from './share';
 
 export interface ShareDialogButtonProps {
     children?: ReactNode | undefined;
@@ -42,13 +42,16 @@ export const ShareDialogButton: React.FC<ShareDialogButtonProps> = ({ children }
     );
 };
 
-type ShareMode = 'step' | 'full';
+type ShareMode = 'step' | 'full' | 'hosted';
 
 const ShareDialogBody: React.FC = () => {
     const classes = useStyles();
     const { canonicalScene, stepIndex } = useScene();
     const { dispatchToast } = useToastController();
     const [mode, setMode] = useState<ShareMode>('full');
+    const [hostedUrl, setHostedUrl] = useState<string>('');
+    const [hostedError, setHostedError] = useState<string | undefined>(undefined);
+    const [isCreatingHosted, setIsCreatingHosted] = useState(false);
 
     const { fullUrl, stepUrl } = useMemo(() => {
         const step = canonicalScene.steps[stepIndex] ?? canonicalScene.steps[0];
@@ -62,8 +65,35 @@ const ShareDialogBody: React.FC = () => {
 
     const url = mode === 'full' ? fullUrl : stepUrl;
 
+    useEffect(() => {
+        setHostedUrl('');
+        setHostedError(undefined);
+    }, [fullUrl]);
+
+    const createHosted = async () => {
+        setIsCreatingHosted(true);
+        setHostedError(undefined);
+        try {
+            const link = await createHostedShareLink(canonicalScene);
+            setHostedUrl(link);
+            dispatchToast(
+                <Toast>
+                    <ToastTitle>Short link created</ToastTitle>
+                </Toast>,
+                { intent: 'success' },
+            );
+        } catch (ex) {
+            console.error('Failed to create hosted share link', ex);
+            setHostedError(ex instanceof Error ? ex.message : String(ex));
+        } finally {
+            setIsCreatingHosted(false);
+        }
+    };
+
     const copyToClipboard = async () => {
-        await navigator.clipboard.writeText(url);
+        const value = mode === 'hosted' ? hostedUrl : url;
+        if (!value) return;
+        await navigator.clipboard.writeText(value);
         dispatchToast(<CopySuccessToast />, { intent: 'success' });
     };
 
@@ -79,11 +109,16 @@ const ShareDialogBody: React.FC = () => {
                     >
                         <Radio value="full" label="Full plan (Discord-friendly)" />
                         <Radio value="step" label="Current step (extra short)" />
+                        <Radio value="hosted" label="Hosted short link (requires internet)" />
                     </RadioGroup>
                 </Field>
 
-                <Field label="Link to this plan">
-                    <Textarea value={url} contentEditable={false} appearance="filled-darker" rows={6} />
+                <Field
+                    label="Link to this plan"
+                    validationState={mode === 'hosted' && hostedError ? 'error' : 'none'}
+                    validationMessage={mode === 'hosted' ? hostedError : undefined}
+                >
+                    <Textarea value={mode === 'hosted' ? hostedUrl : url} contentEditable={false} appearance="filled-darker" rows={6} />
                 </Field>
                 <p>
                     If your browser won&apos;t open the link, paste the text into{' '}
@@ -94,7 +129,13 @@ const ShareDialogBody: React.FC = () => {
             <DialogActions fluid className={classes.actions}>
                 <DownloadButton appearance="primary" className={classes.download} />
 
-                <Button appearance="primary" icon={<CopyRegular />} onClick={copyToClipboard}>
+                {mode === 'hosted' && (
+                    <Button appearance="primary" disabled={isCreatingHosted} onClick={createHosted}>
+                        {hostedUrl ? 'Refresh short link' : 'Create short link'}
+                    </Button>
+                )}
+
+                <Button appearance="primary" icon={<CopyRegular />} disabled={mode === 'hosted' ? !hostedUrl : !url} onClick={copyToClipboard}>
                     Copy to clipboard
                 </Button>
 
