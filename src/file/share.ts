@@ -5,15 +5,22 @@ import { Scene } from '../scene';
 
 export function getShareLink(scene: Scene): string {
     const data = sceneToText(scene);
-    return `${location.protocol}//${location.host}${location.pathname}#/plan/${data}`;
+    const path = location.pathname === '/' ? '' : location.pathname;
+    return `${location.protocol}//${location.host}${path}#${data}`;
 }
 
 const PLAN_PREFIX = '#/plan/';
+const SHORT_PLAN_PREFIX = '#~';
 
 function getPlanData(hash: string, searchParams?: URLSearchParams): string | undefined {
     // Current share links are formatted as /#/plan/<data>
     if (hash.startsWith(PLAN_PREFIX)) {
         return decodeURIComponent(hash.substring(PLAN_PREFIX.length));
+    }
+
+    // New share links are formatted as /#<data> (currently they always start with "~" for encoding versioning)
+    if (hash.startsWith(SHORT_PLAN_PREFIX)) {
+        return decodeURIComponent(hash.substring(1));
     }
 
     // Previously, links were formatted as /?path=<data>

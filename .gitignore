@@ -13,6 +13,9 @@ dist-ssr
 *.local
 *.tsbuildinfo
 
+# Temporary files from local experiments
+tmp-*
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

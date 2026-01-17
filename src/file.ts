@@ -1,12 +1,17 @@
 import { Base64 } from 'js-base64';
-import { deflate, inflate } from 'pako';
+import { deflateRaw, inflate, inflateRaw } from 'pako';
 
 import { FileSource } from './SceneProvider';
+import { brotliCompress, brotliDecompress } from './file/brotli';
 import { downloadScene, openFileBlob } from './file/blob';
 import { openFileFs, saveFileFs } from './file/filesystem';
 import { openFileLocalStorage, saveFileLocalStorage } from './file/localStorage';
+import { decodeSceneBinary, encodeSceneBinary } from './file/sceneBinaryCodec';
 import { upgradeScene } from './file/upgrade';
 import { Scene } from './scene';
+
+const URL_ENCODING_PREFIX = '~';
+const BINARY_ENCODING_PREFIX = '~~';
 
 export async function saveFile(scene: Readonly<Scene>, source: FileSource): Promise<void> {
     switch (source.type) {
@@ -46,12 +51,34 @@ async function openFileUnvalidated(source: FileSource) {
 }
 
 export function sceneToText(scene: Readonly<Scene>): string {
-    const compressed = deflate(sceneToJson(scene));
+    const json = JSON.stringify(scene);
+    const compressed = deflateRaw(json, { level: 9, memLevel: 9 });
 
-    return Base64.fromUint8Array(compressed, true);
+    const deflateText = URL_ENCODING_PREFIX + Base64.fromUint8Array(compressed, true);
+
+    try {
+        const binary = encodeSceneBinary(scene);
+        const binaryCompressed = brotliCompress(binary, 11);
+        const brotliText = BINARY_ENCODING_PREFIX + Base64.fromUint8Array(binaryCompressed, true);
+
+        return brotliText.length < deflateText.length ? brotliText : deflateText;
+    } catch (ex) {
+        console.warn('Failed to brotli-compress plan for URL sharing, falling back to deflate.', ex);
+        return deflateText;
+    }
 }
 
 export function textToScene(data: string): Scene {
+    if (data.startsWith(BINARY_ENCODING_PREFIX)) {
+        const decompressed = brotliDecompress(Base64.toUint8Array(data.substring(BINARY_ENCODING_PREFIX.length)));
+        return upgradeScene(decodeSceneBinary(decompressed));
+    }
+
+    if (data.startsWith(URL_ENCODING_PREFIX)) {
+        const decompressed = inflateRaw(Base64.toUint8Array(data.substring(URL_ENCODING_PREFIX.length)));
+        return jsonToScene(new TextDecoder().decode(decompressed));
+    }
+
     const decompressed = inflate(Base64.toUint8Array(data));
 
     return jsonToScene(new TextDecoder().decode(decompressed));

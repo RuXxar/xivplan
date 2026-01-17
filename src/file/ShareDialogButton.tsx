@@ -7,6 +7,8 @@ import {
     DialogTitle,
     DialogTrigger,
     Field,
+    Radio,
+    RadioGroup,
     Textarea,
     Toast,
     ToastTitle,
@@ -14,13 +16,13 @@ import {
     useToastController,
 } from '@fluentui/react-components';
 import { CopyRegular, ShareRegular } from '@fluentui/react-icons';
-import React, { ReactNode } from 'react';
+import React, { ReactNode, useMemo, useState } from 'react';
 import { CollapsableToolbarButton } from '../CollapsableToolbarButton';
 import { HotkeyBlockingDialogBody } from '../HotkeyBlockingDialogBody';
 import { useScene } from '../SceneProvider';
-import { sceneToText } from '../file';
-import { Scene } from '../scene';
+import { Scene, SceneStep } from '../scene';
 import { DownloadButton } from './DownloadButton';
+import { getShareLink } from './share';
 
 export interface ShareDialogButtonProps {
     children?: ReactNode | undefined;
@@ -40,11 +42,25 @@ export const ShareDialogButton: React.FC<ShareDialogButtonProps> = ({ children }
     );
 };
 
+type ShareMode = 'step' | 'full';
+
 const ShareDialogBody: React.FC = () => {
     const classes = useStyles();
-    const { canonicalScene } = useScene();
+    const { canonicalScene, stepIndex } = useScene();
     const { dispatchToast } = useToastController();
-    const url = getSceneUrl(canonicalScene);
+    const [mode, setMode] = useState<ShareMode>('full');
+
+    const { fullUrl, stepUrl } = useMemo(() => {
+        const step = canonicalScene.steps[stepIndex] ?? canonicalScene.steps[0];
+        const stepScene = step ? sceneWithOnlyStep(canonicalScene, step) : canonicalScene;
+
+        return {
+            fullUrl: getShareLink(canonicalScene),
+            stepUrl: getShareLink(stepScene),
+        };
+    }, [canonicalScene, stepIndex]);
+
+    const url = mode === 'full' ? fullUrl : stepUrl;
 
     const copyToClipboard = async () => {
         await navigator.clipboard.writeText(url);
@@ -55,6 +71,17 @@ const ShareDialogBody: React.FC = () => {
         <HotkeyBlockingDialogBody>
             <DialogTitle>Share</DialogTitle>
             <DialogContent>
+                <Field label="Share">
+                    <RadioGroup
+                        className={classes.shareModes}
+                        value={mode}
+                        onChange={(_, data) => setMode(data.value as ShareMode)}
+                    >
+                        <Radio value="full" label="Full plan (Discord-friendly)" />
+                        <Radio value="step" label="Current step (extra short)" />
+                    </RadioGroup>
+                </Field>
+
                 <Field label="Link to this plan">
                     <Textarea value={url} contentEditable={false} appearance="filled-darker" rows={6} />
                 </Field>
@@ -87,9 +114,19 @@ const CopySuccessToast = () => {
     );
 };
 
-function getSceneUrl(scene: Scene) {
-    const data = sceneToText(scene);
-    return `${location.protocol}//${location.host}${location.pathname}#/plan/${data}`;
+function sceneWithOnlyStep(scene: Scene, step: SceneStep): Scene {
+    let maxId = 0;
+    for (const object of step.objects) {
+        if (object.id > maxId) {
+            maxId = object.id;
+        }
+    }
+
+    return {
+        ...scene,
+        nextId: maxId + 1,
+        steps: [step],
+    };
 }
 
 const useStyles = makeStyles({
@@ -98,5 +135,9 @@ const useStyles = makeStyles({
     },
     download: {
         marginRight: 'auto',
+    },
+    shareModes: {
+        display: 'flex',
+        flexFlow: 'column',
     },
 });
