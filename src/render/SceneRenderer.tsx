@@ -2,6 +2,7 @@ import Konva from 'konva';
 import { KonvaEventObject } from 'konva/lib/Node';
 import React, { PropsWithChildren, RefAttributes, useContext, useState } from 'react';
 import { Layer, Stage } from 'react-konva';
+import { useMeasure } from 'react-use';
 import { DefaultCursorProvider } from '../DefaultCursorProvider';
 import { getDropAction } from '../DropHandler';
 import { SceneHotkeyHandler } from '../HotkeyHandler';
@@ -28,6 +29,9 @@ export const SceneRenderer: React.FC<SceneRendererProps> = ({ readOnly }) => {
     const { scene } = useScene();
     const [, setSelection] = useContext(SelectionContext);
     const size = getCanvasSize(scene);
+    const [containerRef, containerBounds] = useMeasure<HTMLDivElement>();
+    const containerWidth = containerBounds.width;
+    const containerHeight = containerBounds.height;
     const [stage, stageRef] = useState<Konva.Stage | null>(null);
 
     const onClickStage = (e: KonvaEventObject<MouseEvent>) => {
@@ -42,14 +46,35 @@ export const SceneRenderer: React.FC<SceneRendererProps> = ({ readOnly }) => {
 
     // console.log(scene);
 
+    let scale = 1;
+    let stageWidth = size.width;
+    let stageHeight = size.height;
+    let stageX = 0;
+    let stageY = 0;
+
+    if (isReadOnly && containerWidth > 0 && containerHeight > 0) {
+        stageWidth = containerWidth;
+        stageHeight = containerHeight;
+        scale = Math.min(stageWidth / size.width, stageHeight / size.height);
+        stageX = (stageWidth - size.width * scale) / 2;
+        stageY = (stageHeight - size.height * scale) / 2;
+    }
+
+    const wrapperStyle = isReadOnly ? { width: '100%', height: '100%' } : { width: size.width, height: size.height };
+
     const stageElement = (
         <Stage
-            {...size}
+            x={stageX}
+            y={stageY}
+            width={stageWidth}
+            height={stageHeight}
+            scaleX={scale}
+            scaleY={scale}
             ref={stageRef}
             onClick={isReadOnly ? undefined : onClickStage}
             listening={!isReadOnly}
             preventDefault={!isReadOnly}
-            style={isReadOnly ? { touchAction: 'pan-x pan-y' } : undefined}
+            style={isReadOnly ? { touchAction: 'none' } : undefined}
         >
             <StageContext value={stage}>
                 <DefaultCursorProvider>
@@ -60,10 +85,18 @@ export const SceneRenderer: React.FC<SceneRendererProps> = ({ readOnly }) => {
     );
 
     if (isReadOnly) {
-        return stageElement;
+        return (
+            <div ref={containerRef} style={wrapperStyle}>
+                {stageElement}
+            </div>
+        );
     }
 
-    return <DropTarget stage={stage}>{stageElement}</DropTarget>;
+    return (
+        <div ref={containerRef} style={wrapperStyle}>
+            <DropTarget stage={stage}>{stageElement}</DropTarget>
+        </div>
+    );
 };
 
 export interface ScenePreviewProps extends RefAttributes<Konva.Stage> {

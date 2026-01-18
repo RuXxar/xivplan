@@ -1,5 +1,5 @@
 import { makeStyles, tokens } from '@fluentui/react-components';
-import React from 'react';
+import React, { useRef } from 'react';
 import { EditModeProvider } from './EditModeProvider';
 import { RegularHotkeyHandler } from './HotkeyHandler';
 import { MainToolbar } from './MainToolbar';
@@ -34,6 +34,47 @@ const MainPageContent: React.FC = () => {
     const classes = useStyles();
     const title = usePageTitle();
     const isMobileView = useIsMobileView();
+    const { dispatch } = useScene();
+    const swipeStart = useRef<{ pointerId: number; x: number; y: number } | null>(null);
+
+    const handlePointerDown: React.PointerEventHandler<HTMLDivElement> = (e) => {
+        if (!isMobileView || e.pointerType !== 'touch') {
+            return;
+        }
+
+        swipeStart.current = { pointerId: e.pointerId, x: e.clientX, y: e.clientY };
+        e.currentTarget.setPointerCapture(e.pointerId);
+    };
+
+    const handlePointerUpOrCancel: React.PointerEventHandler<HTMLDivElement> = (e) => {
+        if (!isMobileView || e.pointerType !== 'touch') {
+            return;
+        }
+
+        const start = swipeStart.current;
+        if (!start || start.pointerId !== e.pointerId) {
+            return;
+        }
+
+        swipeStart.current = null;
+        e.currentTarget.releasePointerCapture(e.pointerId);
+
+        const dx = e.clientX - start.x;
+        const dy = e.clientY - start.y;
+
+        const minSwipe = 50;
+        const isHorizontal = Math.abs(dx) > Math.abs(dy) * 1.25;
+
+        if (!isHorizontal || Math.abs(dx) < minSwipe) {
+            return;
+        }
+
+        if (dx < 0) {
+            dispatch({ type: 'nextStep' });
+        } else {
+            dispatch({ type: 'previousStep' });
+        }
+    };
 
     return (
         <>
@@ -50,7 +91,18 @@ const MainPageContent: React.FC = () => {
             <StepSelect readOnly={isMobileView} />
 
             <div className={classes.stage}>
-                <SceneRenderer readOnly={isMobileView} />
+                {isMobileView ? (
+                    <div
+                        className={classes.stageInner}
+                        onPointerDown={handlePointerDown}
+                        onPointerUp={handlePointerUpOrCancel}
+                        onPointerCancel={handlePointerUpOrCancel}
+                    >
+                        <SceneRenderer readOnly />
+                    </div>
+                ) : (
+                    <SceneRenderer />
+                )}
             </div>
 
             {/* TODO: make panel collapsable */}
@@ -88,6 +140,16 @@ const useStyles = makeStyles({
 
         [MOBILE_VIEW_MEDIA]: {
             minWidth: '0',
+            overflow: 'hidden',
+        },
+    },
+
+    stageInner: {
+        width: '100%',
+        height: '100%',
+
+        [MOBILE_VIEW_MEDIA]: {
+            touchAction: 'none',
         },
     },
 });
