@@ -12,8 +12,11 @@ import { DetailsPanel } from './panel/DetailsPanel';
 import { MainPanel } from './panel/MainPanel';
 import { SceneRenderer } from './render/SceneRenderer';
 import { MIN_STAGE_WIDTH } from './theme';
+import { MOBILE_VIEW_MEDIA_QUERY, useIsMobileView } from './useMobileView';
 import { useIsDirty } from './useIsDirty';
 import { removeFileExtension } from './util';
+
+const MOBILE_VIEW_MEDIA = `@media ${MOBILE_VIEW_MEDIA_QUERY}`;
 
 export const MainPage: React.FC = () => {
     return (
@@ -30,27 +33,28 @@ export const MainPage: React.FC = () => {
 const MainPageContent: React.FC = () => {
     const classes = useStyles();
     const title = usePageTitle();
+    const isMobileView = useIsMobileView();
 
     return (
         <>
             <title>{title}</title>
 
-            <RegularHotkeyHandler />
             <SceneLoadErrorNotifier />
 
-            <MainToolbar />
+            {!isMobileView && <RegularHotkeyHandler />}
+            {!isMobileView && <MainToolbar />}
 
             {/* TODO: make panel collapsable */}
-            <MainPanel />
+            {!isMobileView && <MainPanel />}
 
-            <StepSelect />
+            <StepSelect readOnly={isMobileView} />
 
             <div className={classes.stage}>
-                <SceneRenderer />
+                <SceneRenderer readOnly={isMobileView} />
             </div>
 
             {/* TODO: make panel collapsable */}
-            <DetailsPanel />
+            {!isMobileView && <DetailsPanel />}
         </>
     );
 };
@@ -81,5 +85,9 @@ const useStyles = makeStyles({
         overflow: 'auto',
         minWidth: MIN_STAGE_WIDTH,
         backgroundColor: tokens.colorNeutralBackground1,
+
+        [MOBILE_VIEW_MEDIA]: {
+            minWidth: '0',
+        },
     },
 });

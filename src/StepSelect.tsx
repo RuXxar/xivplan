@@ -36,9 +36,17 @@ import { useScene } from './SceneProvider';
 import { ScenePreview } from './render/SceneRenderer';
 import { Scene } from './scene';
 import { MIN_STAGE_WIDTH } from './theme';
+import { MOBILE_VIEW_MEDIA_QUERY } from './useMobileView';
 
-export const StepSelect: React.FC = () => {
+const MOBILE_VIEW_MEDIA = `@media ${MOBILE_VIEW_MEDIA_QUERY}`;
+
+export interface StepSelectProps {
+    readOnly?: boolean;
+}
+
+export const StepSelect: React.FC<StepSelectProps> = ({ readOnly }) => {
     const classes = useStyles();
+    const isReadOnly = readOnly ?? false;
     const { scene, stepIndex, dispatch } = useScene();
     const steps = scene.steps.map((_, i) => i);
 
@@ -64,11 +72,13 @@ export const StepSelect: React.FC = () => {
                     ))}
                 </TabList>
             </div>
-            <div className={classes.actions}>
-                <AddStepButton className={classes.addButton} />
-                <ReorderStepsButton />
-                <RemoveStepButton />
-            </div>
+            {!isReadOnly && (
+                <div className={classes.actions}>
+                    <AddStepButton className={classes.addButton} />
+                    <ReorderStepsButton />
+                    <RemoveStepButton />
+                </div>
+            )}
         </div>
     );
 };
@@ -293,6 +303,10 @@ const useStyles = makeStyles({
         columnGap: tokens.spacingHorizontalXS,
         backgroundColor: tokens.colorNeutralBackground2,
         minWidth: MIN_STAGE_WIDTH,
+
+        [MOBILE_VIEW_MEDIA]: {
+            minWidth: '0',
+        },
     },
     listWrapper: {
         overflow: 'auto',

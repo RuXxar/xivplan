@@ -19,13 +19,21 @@ import { StageContext } from './StageContext';
 import { TetherEditRenderer } from './TetherEditRenderer';
 import { LayerName } from './layers';
 
-export const SceneRenderer: React.FC = () => {
+export interface SceneRendererProps {
+    readOnly?: boolean;
+}
+
+export const SceneRenderer: React.FC<SceneRendererProps> = ({ readOnly }) => {
+    const isReadOnly = readOnly ?? false;
     const { scene } = useScene();
     const [, setSelection] = useContext(SelectionContext);
     const size = getCanvasSize(scene);
     const [stage, stageRef] = useState<Konva.Stage | null>(null);
 
     const onClickStage = (e: KonvaEventObject<MouseEvent>) => {
+        if (isReadOnly) {
+            return;
+        }
         // Clicking on nothing (with no modifier keys held) should cancel selection.
         if (!e.evt.ctrlKey && !e.evt.shiftKey) {
             setSelection(selectNone());
@@ -34,17 +42,28 @@ export const SceneRenderer: React.FC = () => {
 
     // console.log(scene);
 
-    return (
-        <DropTarget stage={stage}>
-            <Stage {...size} ref={stageRef} onClick={onClickStage}>
-                <StageContext value={stage}>
-                    <DefaultCursorProvider>
-                        <SceneContents />
-                    </DefaultCursorProvider>
-                </StageContext>
-            </Stage>
-        </DropTarget>
+    const stageElement = (
+        <Stage
+            {...size}
+            ref={stageRef}
+            onClick={isReadOnly ? undefined : onClickStage}
+            listening={!isReadOnly}
+            preventDefault={!isReadOnly}
+            style={isReadOnly ? { touchAction: 'pan-x pan-y' } : undefined}
+        >
+            <StageContext value={stage}>
+                <DefaultCursorProvider>
+                    <SceneContents listening={!isReadOnly} />
+                </DefaultCursorProvider>
+            </StageContext>
+        </Stage>
     );
+
+    if (isReadOnly) {
+        return stageElement;
+    }
+
+    return <DropTarget stage={stage}>{stageElement}</DropTarget>;
 };
 
 export interface ScenePreviewProps extends RefAttributes<Konva.Stage> {

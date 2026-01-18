@@ -10,8 +10,11 @@ import { MainPage } from './MainPage';
 import { SceneProvider } from './SceneProvider';
 import { SiteHeader } from './SiteHeader';
 import { ThemeProvider } from './ThemeProvider';
+import { MOBILE_VIEW_MEDIA_QUERY, useIsMobileView } from './useMobileView';
 import { useFileLoaderDropTarget } from './useFileLoader';
 import { HotkeyScopes } from './useHotkeys';
+
+const MOBILE_VIEW_MEDIA = `@media ${MOBILE_VIEW_MEDIA_QUERY}`;
 
 const useStyles = makeStyles({
     root: {
@@ -30,9 +33,21 @@ const useStyles = makeStyles({
             `,
 
         background: tokens.colorNeutralBackground3,
+
+        [MOBILE_VIEW_MEDIA]: {
+            gridTemplateColumns: '1fr',
+            gridTemplateRows: `min-content 1fr`,
+            gridTemplateAreas: `
+                "steps"
+                "content"
+            `,
+        },
     },
     header: {
         gridArea: 'header',
+        [MOBILE_VIEW_MEDIA]: {
+            display: 'none',
+        },
     },
 
     loading: {
@@ -87,13 +102,14 @@ const Layout: React.FC = () => {
 
 const Root: React.FC = () => {
     const classes = useStyles();
+    const isMobileView = useIsMobileView();
     const { onDragOver, onDrop, renderModal } = useFileLoaderDropTarget();
 
     return (
         <>
             <div className={classes.root} onDragOver={onDragOver} onDrop={onDrop}>
                 <Toaster position="top" />
-                <SiteHeader className={classes.header} />
+                {!isMobileView && <SiteHeader className={classes.header} />}
                 <Outlet />
             </div>
             {renderModal()}
