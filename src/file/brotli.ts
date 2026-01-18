@@ -9,4 +9,3 @@ export function brotliCompress(data: Uint8Array, quality = 11): Uint8Array {
 export function brotliDecompress(data: Uint8Array): Uint8Array {
     return brotli.decompress(data);
 }
-

@@ -63,10 +63,13 @@ const DISCORD_FORMAT_CODES: Record<string, number> = {
     jpeg: 4,
     gif: 5,
 };
-const DISCORD_FORMAT_CODE_TO_NAME = Object.entries(DISCORD_FORMAT_CODES).reduce<Record<number, string>>((acc, [k, v]) => {
-    acc[v] = k;
-    return acc;
-}, {});
+const DISCORD_FORMAT_CODE_TO_NAME = Object.entries(DISCORD_FORMAT_CODES).reduce<Record<number, string>>(
+    (acc, [k, v]) => {
+        acc[v] = k;
+        return acc;
+    },
+    {},
+);
 
 const DISCORD_QUALITY_CODES: Record<string, number> = {
     lossless: 1,
@@ -75,10 +78,13 @@ const DISCORD_QUALITY_CODES: Record<string, number> = {
     high: 4,
     auto: 5,
 };
-const DISCORD_QUALITY_CODE_TO_NAME = Object.entries(DISCORD_QUALITY_CODES).reduce<Record<number, string>>((acc, [k, v]) => {
-    acc[v] = k;
-    return acc;
-}, {});
+const DISCORD_QUALITY_CODE_TO_NAME = Object.entries(DISCORD_QUALITY_CODES).reduce<Record<number, string>>(
+    (acc, [k, v]) => {
+        acc[v] = k;
+        return acc;
+    },
+    {},
+);
 
 const COLOR_PALETTE = [
     '#ff0000',
@@ -553,7 +559,9 @@ function readDiscordBackground(reader: ByteReader): string {
 
     const fileCode = reader.readU8();
     const fileName =
-        fileCode === DISCORD_FILE_OTHER_CODE ? reader.readString() : DISCORD_FILE_CODE_TO_NAME[fileCode] ?? 'image.png';
+        fileCode === DISCORD_FILE_OTHER_CODE
+            ? reader.readString()
+            : (DISCORD_FILE_CODE_TO_NAME[fileCode] ?? 'image.png');
 
     const mask = reader.readU8();
 
@@ -807,7 +815,10 @@ function writeObjectBinary(
         if (preset !== undefined) flags |= PARTY_FLAG_PRESET;
 
         if ((party.rotation ?? 0) !== 0) flags |= PARTY_FLAG_ROTATION;
-        if ((party.width ?? DEFAULT_PARTY_SIZE) !== DEFAULT_PARTY_SIZE || (party.height ?? DEFAULT_PARTY_SIZE) !== DEFAULT_PARTY_SIZE)
+        if (
+            (party.width ?? DEFAULT_PARTY_SIZE) !== DEFAULT_PARTY_SIZE ||
+            (party.height ?? DEFAULT_PARTY_SIZE) !== DEFAULT_PARTY_SIZE
+        )
             flags |= PARTY_FLAG_SIZE;
         if (opacity !== defaultOpacity) flags |= PARTY_FLAG_OPACITY;
 
@@ -1080,7 +1091,9 @@ function writeObjectBinary(
 
     const supportsV2 = version >= CODEC_VERSION_V2;
     const zoneOpacityCode = supportsV2 ? getZoneOpacityCodeV2(opacityInt, defaultOpacity) : 0;
-    const shouldWriteZoneOpacity = supportsV2 ? zoneOpacityCode === ZONE_V2_OPACITY_CUSTOM : opacityInt !== defaultOpacity;
+    const shouldWriteZoneOpacity = supportsV2
+        ? zoneOpacityCode === ZONE_V2_OPACITY_CUSTOM
+        : opacityInt !== defaultOpacity;
     const shouldWriteZoneRotation = rotation !== 0;
 
     if (hollow) flags |= ZONE_FLAG_HOLLOW;
@@ -1144,7 +1157,14 @@ function writeObjectBinary(
     }
 
     if (type === ObjectType.Line) {
-        const line = obj as unknown as { color: string; length: number; width: number; x: number; y: number; rotation: number };
+        const line = obj as unknown as {
+            color: string;
+            length: number;
+            width: number;
+            x: number;
+            y: number;
+            rotation: number;
+        };
         writeColor(writer, line.color);
         writer.writeUVar(Math.round(line.length));
         writer.writeUVar(Math.round(line.width));
@@ -1156,7 +1176,14 @@ function writeObjectBinary(
     }
 
     if (type === ObjectType.Cone) {
-        const cone = obj as unknown as { color: string; radius: number; coneAngle: number; x: number; y: number; rotation: number };
+        const cone = obj as unknown as {
+            color: string;
+            radius: number;
+            coneAngle: number;
+            x: number;
+            y: number;
+            rotation: number;
+        };
         writeColor(writer, cone.color);
         writer.writeUVar(Math.round(cone.radius));
         writer.writeUVar(Math.round(cone.coneAngle));
@@ -1196,7 +1223,14 @@ function writeObjectBinary(
         type === ObjectType.Triangle ||
         type === ObjectType.RightTriangle
     ) {
-        const rect = obj as unknown as { color: string; width: number; height: number; x: number; y: number; rotation: number };
+        const rect = obj as unknown as {
+            color: string;
+            width: number;
+            height: number;
+            x: number;
+            y: number;
+            rotation: number;
+        };
         writeColor(writer, rect.color);
         writer.writeUVar(Math.round(rect.width));
         writer.writeUVar(Math.round(rect.height));
@@ -1419,518 +1453,567 @@ export function encodeSceneBinary(scene: Readonly<Scene>, version: number = LATE
         }
     } else {
         for (const step of scene.steps) {
-        const idToIndex = new Map<number, number>();
-        step.objects.forEach((o, i) => idToIndex.set(o.id, i));
+            const idToIndex = new Map<number, number>();
+            step.objects.forEach((o, i) => idToIndex.set(o.id, i));
 
-        writer.writeUVar(step.objects.length);
+            writer.writeUVar(step.objects.length);
 
-        for (const obj of step.objects) {
-            const type = obj.type as ObjectType;
-            writer.writeU8(getObjectTypeCode(type));
+            for (const obj of step.objects) {
+                const type = obj.type as ObjectType;
+                writer.writeU8(getObjectTypeCode(type));
 
-            const hide = !!(obj as unknown as { hide?: boolean }).hide;
-            const pinned = !!(obj as unknown as { pinned?: boolean }).pinned;
+                const hide = !!(obj as unknown as { hide?: boolean }).hide;
+                const pinned = !!(obj as unknown as { pinned?: boolean }).pinned;
 
-            let flags = 0;
-            if (hide) flags |= FLAG_HIDE;
-            if (pinned) flags |= FLAG_PINNED;
+                let flags = 0;
+                if (hide) flags |= FLAG_HIDE;
+                if (pinned) flags |= FLAG_PINNED;
 
-            const opacity = (obj as unknown as { opacity?: number }).opacity ?? getDefaultOpacity(type);
-            const defaultOpacity = getDefaultOpacity(type);
+                const opacity = (obj as unknown as { opacity?: number }).opacity ?? getDefaultOpacity(type);
+                const defaultOpacity = getDefaultOpacity(type);
 
-            if (type === ObjectType.Party) {
-                const party = obj as unknown as {
-                    image: string;
-                    name: string;
-                    x: number;
-                    y: number;
-                    rotation?: number;
-                    width?: number;
-                    height?: number;
-                    opacity?: number;
-                };
+                if (type === ObjectType.Party) {
+                    const party = obj as unknown as {
+                        image: string;
+                        name: string;
+                        x: number;
+                        y: number;
+                        rotation?: number;
+                        width?: number;
+                        height?: number;
+                        opacity?: number;
+                    };
 
-                const presetKey = `${party.image}\n${party.name}`;
-                const preset = PARTY_PRESET_INDEX.get(presetKey);
-                if (preset !== undefined) flags |= PARTY_FLAG_PRESET;
+                    const presetKey = `${party.image}\n${party.name}`;
+                    const preset = PARTY_PRESET_INDEX.get(presetKey);
+                    if (preset !== undefined) flags |= PARTY_FLAG_PRESET;
 
-                if ((party.rotation ?? 0) !== 0) flags |= PARTY_FLAG_ROTATION;
-                if ((party.width ?? DEFAULT_PARTY_SIZE) !== DEFAULT_PARTY_SIZE || (party.height ?? DEFAULT_PARTY_SIZE) !== DEFAULT_PARTY_SIZE)
-                    flags |= PARTY_FLAG_SIZE;
-                if (opacity !== defaultOpacity) flags |= PARTY_FLAG_OPACITY;
+                    if ((party.rotation ?? 0) !== 0) flags |= PARTY_FLAG_ROTATION;
+                    if (
+                        (party.width ?? DEFAULT_PARTY_SIZE) !== DEFAULT_PARTY_SIZE ||
+                        (party.height ?? DEFAULT_PARTY_SIZE) !== DEFAULT_PARTY_SIZE
+                    )
+                        flags |= PARTY_FLAG_SIZE;
+                    if (opacity !== defaultOpacity) flags |= PARTY_FLAG_OPACITY;
 
-                writer.writeUVar(flags);
+                    writer.writeUVar(flags);
 
-                if (flags & PARTY_FLAG_PRESET) {
-                    writer.writeUVar(preset ?? 0);
+                    if (flags & PARTY_FLAG_PRESET) {
+                        writer.writeUVar(preset ?? 0);
+                    } else {
+                        writeStringIndex(writer, table, party.image);
+                        writeStringIndex(writer, table, party.name);
+                    }
+
+                    writer.writeSVar(encodeCoord(party.x));
+                    writer.writeSVar(encodeCoord(party.y));
+
+                    if (flags & PARTY_FLAG_ROTATION) writer.writeSVar(Math.round(party.rotation ?? 0));
+                    if (flags & PARTY_FLAG_SIZE) {
+                        writer.writeUVar(Math.round(party.width ?? DEFAULT_PARTY_SIZE));
+                        writer.writeUVar(Math.round(party.height ?? DEFAULT_PARTY_SIZE));
+                    }
+                    if (flags & PARTY_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+                    continue;
+                }
+
+                if (type === ObjectType.Enemy) {
+                    const enemy = obj as unknown as {
+                        icon: string;
+                        name: string;
+                        color: string;
+                        radius: number;
+                        x: number;
+                        y: number;
+                        rotation?: number;
+                        opacity?: number;
+                        ring?: EnemyRingStyle;
+                    };
+
+                    if (enemy.name) flags |= ENEMY_FLAG_NAME;
+                    if ((enemy.rotation ?? 0) !== 0) flags |= ENEMY_FLAG_ROTATION;
+                    if (opacity !== defaultOpacity) flags |= ENEMY_FLAG_OPACITY;
+                    if ((enemy.ring ?? EnemyRingStyle.Directional) !== EnemyRingStyle.Directional)
+                        flags |= ENEMY_FLAG_RING;
+
+                    writer.writeUVar(flags);
+                    writeStringIndex(writer, table, enemy.icon);
+                    if (flags & ENEMY_FLAG_NAME) writeStringIndex(writer, table, enemy.name);
+                    writeColor(writer, enemy.color);
+                    writer.writeUVar(Math.round(enemy.radius));
+                    writer.writeSVar(encodeCoord(enemy.x));
+                    writer.writeSVar(encodeCoord(enemy.y));
+                    if (flags & ENEMY_FLAG_ROTATION) writer.writeSVar(Math.round(enemy.rotation ?? 0));
+                    if (flags & ENEMY_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+                    if (flags & ENEMY_FLAG_RING) {
+                        const ring = enemy.ring ?? EnemyRingStyle.Directional;
+                        writer.writeU8(
+                            ring === EnemyRingStyle.NoDirection ? 0 : ring === EnemyRingStyle.Omnidirectional ? 2 : 1,
+                        );
+                    }
+                    continue;
+                }
+
+                if (type === ObjectType.Text) {
+                    const text = obj as unknown as {
+                        text: string;
+                        x: number;
+                        y: number;
+                        style: string;
+                        align: string;
+                        fontSize: number;
+                        color: string;
+                        stroke: string;
+                        rotation?: number;
+                        opacity?: number;
+                    };
+
+                    if (text.style !== DEFAULT_TEXT_STYLE) flags |= TEXT_FLAG_STYLE;
+                    if (text.align !== DEFAULT_TEXT_ALIGN) flags |= TEXT_FLAG_ALIGN;
+                    if (text.fontSize !== DEFAULT_TEXT_FONT_SIZE) flags |= TEXT_FLAG_FONT_SIZE;
+                    if (text.color !== DEFAULT_TEXT_COLOR) flags |= TEXT_FLAG_COLOR;
+                    if (opacity !== DEFAULT_OPACITY_TEXT) flags |= TEXT_FLAG_OPACITY;
+                    if ((text.rotation ?? 0) !== 0) flags |= TEXT_FLAG_ROTATION;
+                    if (text.stroke !== DEFAULT_TEXT_STROKE) flags |= TEXT_FLAG_STROKE;
+
+                    writer.writeUVar(flags);
+                    writeStringIndex(writer, table, text.text);
+                    writer.writeSVar(encodeCoord(text.x));
+                    writer.writeSVar(encodeCoord(text.y));
+                    if (flags & TEXT_FLAG_STYLE) {
+                        writer.writeU8(text.style === 'shadow' ? 1 : text.style === 'plain' ? 2 : 0);
+                    }
+                    if (flags & TEXT_FLAG_ALIGN) writeStringIndex(writer, table, text.align);
+                    if (flags & TEXT_FLAG_FONT_SIZE) writer.writeUVar(Math.round(text.fontSize));
+                    if (flags & TEXT_FLAG_COLOR) writeColor(writer, text.color);
+                    if (flags & TEXT_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+                    if (flags & TEXT_FLAG_ROTATION) writer.writeSVar(Math.round(text.rotation ?? 0));
+                    if (flags & TEXT_FLAG_STROKE) writeColor(writer, text.stroke);
+                    continue;
+                }
+
+                if (type === ObjectType.Tether) {
+                    const tether = obj as unknown as {
+                        tether: TetherType;
+                        startId: number;
+                        endId: number;
+                        width: number;
+                        color: string;
+                        opacity?: number;
+                    };
+
+                    const startIndex = idToIndex.get(tether.startId) ?? 0;
+                    const endIndex = idToIndex.get(tether.endId) ?? 0;
+
+                    const tetherType = tether.tether ?? TetherType.Line;
+                    if (tetherType !== TetherType.Line) flags |= TETHER_FLAG_TYPE;
+                    if (tether.width !== DEFAULT_TETHER_WIDTH) flags |= TETHER_FLAG_WIDTH;
+                    if (opacity !== DEFAULT_OPACITY_TETHER) flags |= TETHER_FLAG_OPACITY;
+                    if (tether.color !== getDefaultTetherColor(tetherType)) flags |= TETHER_FLAG_COLOR;
+
+                    writer.writeUVar(flags);
+                    writer.writeUVar(startIndex);
+                    writer.writeUVar(endIndex);
+
+                    if (flags & TETHER_FLAG_TYPE) {
+                        writer.writeU8(
+                            tetherType === TetherType.Close
+                                ? 1
+                                : tetherType === TetherType.Far
+                                  ? 2
+                                  : tetherType === TetherType.MinusMinus
+                                    ? 3
+                                    : tetherType === TetherType.PlusMinus
+                                      ? 4
+                                      : tetherType === TetherType.PlusPlus
+                                        ? 5
+                                        : 0,
+                        );
+                    }
+
+                    if (flags & TETHER_FLAG_WIDTH) writer.writeUVar(Math.round(tether.width));
+                    if (flags & TETHER_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+                    if (flags & TETHER_FLAG_COLOR) writeColor(writer, tether.color);
+                    continue;
+                }
+
+                if (type === ObjectType.Marker) {
+                    const marker = obj as unknown as {
+                        name: string;
+                        image: string;
+                        shape?: string;
+                        color: string;
+                        x: number;
+                        y: number;
+                        width: number;
+                        height: number;
+                        rotation: number;
+                        opacity?: number;
+                    };
+
+                    if ((marker.shape ?? DEFAULT_MARKER_SHAPE) !== DEFAULT_MARKER_SHAPE) flags |= MARKER_FLAG_SHAPE;
+                    if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= MARKER_FLAG_OPACITY;
+
+                    writer.writeUVar(flags);
+                    writeStringIndex(writer, table, marker.image);
+                    writeStringIndex(writer, table, marker.name);
+                    writer.writeSVar(encodeCoord(marker.x));
+                    writer.writeSVar(encodeCoord(marker.y));
+                    writer.writeUVar(Math.round(marker.width));
+                    writer.writeUVar(Math.round(marker.height));
+                    writer.writeSVar(Math.round(marker.rotation));
+                    if (flags & MARKER_FLAG_SHAPE)
+                        writer.writeU8((marker.shape ?? DEFAULT_MARKER_SHAPE) === 'square' ? 1 : 0);
+                    writeColor(writer, marker.color);
+                    if (flags & MARKER_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+                    continue;
+                }
+
+                if (type === ObjectType.Icon) {
+                    const icon = obj as unknown as {
+                        name: string;
+                        image: string;
+                        iconId?: number;
+                        maxStacks?: number;
+                        time?: number;
+                        x: number;
+                        y: number;
+                        width: number;
+                        height: number;
+                        rotation: number;
+                        opacity?: number;
+                    };
+
+                    if (icon.width !== DEFAULT_PARTY_SIZE || icon.height !== DEFAULT_PARTY_SIZE)
+                        flags |= IMAGE_FLAG_SIZE;
+                    if (icon.rotation !== 0) flags |= IMAGE_FLAG_ROTATION;
+                    if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= IMAGE_FLAG_OPACITY;
+
+                    // iconId/maxStacks/time are optional and not common; store them only if present.
+                    if (icon.iconId !== undefined) flags |= 0x10;
+                    if (icon.maxStacks !== undefined) flags |= 0x20;
+                    if (icon.time !== undefined) flags |= 0x40;
+
+                    writer.writeUVar(flags);
+                    writeStringIndex(writer, table, icon.image);
+                    writeStringIndex(writer, table, icon.name);
+                    writer.writeSVar(encodeCoord(icon.x));
+                    writer.writeSVar(encodeCoord(icon.y));
+                    if (flags & IMAGE_FLAG_SIZE) {
+                        writer.writeUVar(Math.round(icon.width));
+                        writer.writeUVar(Math.round(icon.height));
+                    }
+                    if (flags & IMAGE_FLAG_ROTATION) writer.writeSVar(Math.round(icon.rotation));
+                    if (flags & IMAGE_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+                    if (flags & 0x10) writer.writeUVar(Math.round(icon.iconId ?? 0));
+                    if (flags & 0x20) writer.writeUVar(Math.round(icon.maxStacks ?? 0));
+                    if (flags & 0x40) writer.writeUVar(Math.round(icon.time ?? 0));
+                    continue;
+                }
+
+                if (type === ObjectType.Arrow) {
+                    const arrow = obj as unknown as {
+                        color: string;
+                        x: number;
+                        y: number;
+                        width: number;
+                        height: number;
+                        rotation: number;
+                        opacity?: number;
+                        arrowBegin?: boolean;
+                        arrowEnd?: boolean;
+                    };
+
+                    if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= ARROW_FLAG_OPACITY;
+                    if (arrow.rotation !== 0) flags |= ARROW_FLAG_ROTATION;
+                    if (arrow.arrowEnd) flags |= ARROW_FLAG_END;
+                    if (arrow.arrowBegin) flags |= ARROW_FLAG_BEGIN;
+
+                    writer.writeUVar(flags);
+                    writeColor(writer, arrow.color);
+                    writer.writeUVar(Math.round(arrow.width));
+                    writer.writeUVar(Math.round(arrow.height));
+                    writer.writeSVar(encodeCoord(arrow.x));
+                    writer.writeSVar(encodeCoord(arrow.y));
+                    if (flags & ARROW_FLAG_ROTATION) writer.writeSVar(Math.round(arrow.rotation));
+                    if (flags & ARROW_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
+                    continue;
+                }
+
+                if (type === ObjectType.Draw) {
+                    const draw = obj as unknown as DrawObject;
+                    // Draw objects contain floats; encode them losslessly as float32.
+                    if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= 0x01;
+                    if (draw.rotation !== 0) flags |= 0x02;
+
+                    writer.writeUVar(flags);
+                    writeColor(writer, draw.color);
+                    writer.writeF32(draw.x);
+                    writer.writeF32(draw.y);
+                    writer.writeF32(draw.width);
+                    writer.writeF32(draw.height);
+                    if (flags & 0x02) writer.writeF32(draw.rotation);
+                    writer.writeUVar(draw.points.length);
+                    for (const p of draw.points) writer.writeF32(p);
+                    writer.writeUVar(Math.round(draw.brushSize));
+                    if (flags & 0x01) writer.writeUVar(Math.round(opacity));
+                    continue;
+                }
+
+                // Zones and other objects
+                const moveable = obj as unknown as { x?: number; y?: number };
+                const rotateable = obj as unknown as { rotation?: number };
+
+                const hollow = !!(obj as unknown as { hollow?: boolean }).hollow;
+                const rotation = rotateable.rotation ?? 0;
+                const opacityInt = Math.round(opacity);
+
+                const isV2 = version === CODEC_VERSION_V2;
+                const zoneOpacityCode = isV2 ? getZoneOpacityCodeV2(opacityInt, defaultOpacity) : 0;
+                const shouldWriteZoneOpacity = isV2
+                    ? zoneOpacityCode === ZONE_V2_OPACITY_CUSTOM
+                    : opacityInt !== defaultOpacity;
+                const shouldWriteZoneRotation = rotation !== 0;
+
+                if (hollow) flags |= ZONE_FLAG_HOLLOW;
+                if (isV2) {
+                    flags |= (zoneOpacityCode & 0x07) << ZONE_V2_OPACITY_SHIFT;
+                    if (shouldWriteZoneRotation) flags |= ZONE_V2_FLAG_ROTATION;
                 } else {
-                    writeStringIndex(writer, table, party.image);
-                    writeStringIndex(writer, table, party.name);
+                    if (opacityInt !== defaultOpacity) flags |= ZONE_FLAG_OPACITY;
+                    if (shouldWriteZoneRotation) flags |= ZONE_FLAG_ROTATION;
                 }
 
-                writer.writeSVar(encodeCoord(party.x));
-                writer.writeSVar(encodeCoord(party.y));
-
-                if (flags & PARTY_FLAG_ROTATION) writer.writeSVar(Math.round(party.rotation ?? 0));
-                if (flags & PARTY_FLAG_SIZE) {
-                    writer.writeUVar(Math.round(party.width ?? DEFAULT_PARTY_SIZE));
-                    writer.writeUVar(Math.round(party.height ?? DEFAULT_PARTY_SIZE));
-                }
-                if (flags & PARTY_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
-                continue;
-            }
-
-            if (type === ObjectType.Enemy) {
-                const enemy = obj as unknown as {
-                    icon: string;
-                    name: string;
-                    color: string;
-                    radius: number;
-                    x: number;
-                    y: number;
-                    rotation?: number;
-                    opacity?: number;
-                    ring?: EnemyRingStyle;
-                };
-
-                if (enemy.name) flags |= ENEMY_FLAG_NAME;
-                if ((enemy.rotation ?? 0) !== 0) flags |= ENEMY_FLAG_ROTATION;
-                if (opacity !== defaultOpacity) flags |= ENEMY_FLAG_OPACITY;
-                if ((enemy.ring ?? EnemyRingStyle.Directional) !== EnemyRingStyle.Directional) flags |= ENEMY_FLAG_RING;
-
                 writer.writeUVar(flags);
-                writeStringIndex(writer, table, enemy.icon);
-                if (flags & ENEMY_FLAG_NAME) writeStringIndex(writer, table, enemy.name);
-                writeColor(writer, enemy.color);
-                writer.writeUVar(Math.round(enemy.radius));
-                writer.writeSVar(encodeCoord(enemy.x));
-                writer.writeSVar(encodeCoord(enemy.y));
-                if (flags & ENEMY_FLAG_ROTATION) writer.writeSVar(Math.round(enemy.rotation ?? 0));
-                if (flags & ENEMY_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
-                if (flags & ENEMY_FLAG_RING) {
-                    const ring = enemy.ring ?? EnemyRingStyle.Directional;
-                    writer.writeU8(ring === EnemyRingStyle.NoDirection ? 0 : ring === EnemyRingStyle.Omnidirectional ? 2 : 1);
-                }
-                continue;
-            }
 
-            if (type === ObjectType.Text) {
-                const text = obj as unknown as {
-                    text: string;
-                    x: number;
-                    y: number;
-                    style: string;
-                    align: string;
-                    fontSize: number;
-                    color: string;
-                    stroke: string;
-                    rotation?: number;
-                    opacity?: number;
-                };
-
-                if (text.style !== DEFAULT_TEXT_STYLE) flags |= TEXT_FLAG_STYLE;
-                if (text.align !== DEFAULT_TEXT_ALIGN) flags |= TEXT_FLAG_ALIGN;
-                if (text.fontSize !== DEFAULT_TEXT_FONT_SIZE) flags |= TEXT_FLAG_FONT_SIZE;
-                if (text.color !== DEFAULT_TEXT_COLOR) flags |= TEXT_FLAG_COLOR;
-                if (opacity !== DEFAULT_OPACITY_TEXT) flags |= TEXT_FLAG_OPACITY;
-                if ((text.rotation ?? 0) !== 0) flags |= TEXT_FLAG_ROTATION;
-                if (text.stroke !== DEFAULT_TEXT_STROKE) flags |= TEXT_FLAG_STROKE;
-
-                writer.writeUVar(flags);
-                writeStringIndex(writer, table, text.text);
-                writer.writeSVar(encodeCoord(text.x));
-                writer.writeSVar(encodeCoord(text.y));
-                if (flags & TEXT_FLAG_STYLE) {
-                    writer.writeU8(text.style === 'shadow' ? 1 : text.style === 'plain' ? 2 : 0);
-                }
-                if (flags & TEXT_FLAG_ALIGN) writeStringIndex(writer, table, text.align);
-                if (flags & TEXT_FLAG_FONT_SIZE) writer.writeUVar(Math.round(text.fontSize));
-                if (flags & TEXT_FLAG_COLOR) writeColor(writer, text.color);
-                if (flags & TEXT_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
-                if (flags & TEXT_FLAG_ROTATION) writer.writeSVar(Math.round(text.rotation ?? 0));
-                if (flags & TEXT_FLAG_STROKE) writeColor(writer, text.stroke);
-                continue;
-            }
-
-            if (type === ObjectType.Tether) {
-                const tether = obj as unknown as {
-                    tether: TetherType;
-                    startId: number;
-                    endId: number;
-                    width: number;
-                    color: string;
-                    opacity?: number;
-                };
-
-                const startIndex = idToIndex.get(tether.startId) ?? 0;
-                const endIndex = idToIndex.get(tether.endId) ?? 0;
-
-                const tetherType = tether.tether ?? TetherType.Line;
-                if (tetherType !== TetherType.Line) flags |= TETHER_FLAG_TYPE;
-                if (tether.width !== DEFAULT_TETHER_WIDTH) flags |= TETHER_FLAG_WIDTH;
-                if (opacity !== DEFAULT_OPACITY_TETHER) flags |= TETHER_FLAG_OPACITY;
-                if (tether.color !== getDefaultTetherColor(tetherType)) flags |= TETHER_FLAG_COLOR;
-
-                writer.writeUVar(flags);
-                writer.writeUVar(startIndex);
-                writer.writeUVar(endIndex);
-
-                if (flags & TETHER_FLAG_TYPE) {
-                    writer.writeU8(
-                        tetherType === TetherType.Close
-                            ? 1
-                            : tetherType === TetherType.Far
-                              ? 2
-                              : tetherType === TetherType.MinusMinus
-                                ? 3
-                                : tetherType === TetherType.PlusMinus
-                                  ? 4
-                                  : tetherType === TetherType.PlusPlus
-                                    ? 5
-                                    : 0,
-                    );
+                if (
+                    type === ObjectType.Circle ||
+                    type === ObjectType.Proximity ||
+                    type === ObjectType.Knockback ||
+                    type === ObjectType.RotateCW ||
+                    type === ObjectType.RotateCCW
+                ) {
+                    const circle = obj as unknown as { color: string; radius: number; x: number; y: number };
+                    writeColor(writer, circle.color);
+                    writer.writeUVar(Math.round(circle.radius));
+                    writer.writeSVar(encodeCoord(circle.x));
+                    writer.writeSVar(encodeCoord(circle.y));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
                 }
 
-                if (flags & TETHER_FLAG_WIDTH) writer.writeUVar(Math.round(tether.width));
-                if (flags & TETHER_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
-                if (flags & TETHER_FLAG_COLOR) writeColor(writer, tether.color);
-                continue;
-            }
-
-            if (type === ObjectType.Marker) {
-                const marker = obj as unknown as {
-                    name: string;
-                    image: string;
-                    shape?: string;
-                    color: string;
-                    x: number;
-                    y: number;
-                    width: number;
-                    height: number;
-                    rotation: number;
-                    opacity?: number;
-                };
-
-                if ((marker.shape ?? DEFAULT_MARKER_SHAPE) !== DEFAULT_MARKER_SHAPE) flags |= MARKER_FLAG_SHAPE;
-                if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= MARKER_FLAG_OPACITY;
-
-                writer.writeUVar(flags);
-                writeStringIndex(writer, table, marker.image);
-                writeStringIndex(writer, table, marker.name);
-                writer.writeSVar(encodeCoord(marker.x));
-                writer.writeSVar(encodeCoord(marker.y));
-                writer.writeUVar(Math.round(marker.width));
-                writer.writeUVar(Math.round(marker.height));
-                writer.writeSVar(Math.round(marker.rotation));
-                if (flags & MARKER_FLAG_SHAPE) writer.writeU8((marker.shape ?? DEFAULT_MARKER_SHAPE) === 'square' ? 1 : 0);
-                writeColor(writer, marker.color);
-                if (flags & MARKER_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
-                continue;
-            }
-
-            if (type === ObjectType.Icon) {
-                const icon = obj as unknown as {
-                    name: string;
-                    image: string;
-                    iconId?: number;
-                    maxStacks?: number;
-                    time?: number;
-                    x: number;
-                    y: number;
-                    width: number;
-                    height: number;
-                    rotation: number;
-                    opacity?: number;
-                };
-
-                if (icon.width !== DEFAULT_PARTY_SIZE || icon.height !== DEFAULT_PARTY_SIZE) flags |= IMAGE_FLAG_SIZE;
-                if (icon.rotation !== 0) flags |= IMAGE_FLAG_ROTATION;
-                if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= IMAGE_FLAG_OPACITY;
-
-                // iconId/maxStacks/time are optional and not common; store them only if present.
-                if (icon.iconId !== undefined) flags |= 0x10;
-                if (icon.maxStacks !== undefined) flags |= 0x20;
-                if (icon.time !== undefined) flags |= 0x40;
-
-                writer.writeUVar(flags);
-                writeStringIndex(writer, table, icon.image);
-                writeStringIndex(writer, table, icon.name);
-                writer.writeSVar(encodeCoord(icon.x));
-                writer.writeSVar(encodeCoord(icon.y));
-                if (flags & IMAGE_FLAG_SIZE) {
-                    writer.writeUVar(Math.round(icon.width));
-                    writer.writeUVar(Math.round(icon.height));
+                if (type === ObjectType.Donut) {
+                    const donut = obj as unknown as {
+                        color: string;
+                        radius: number;
+                        innerRadius: number;
+                        x: number;
+                        y: number;
+                    };
+                    writeColor(writer, donut.color);
+                    writer.writeUVar(Math.round(donut.radius));
+                    writer.writeUVar(Math.round(donut.innerRadius));
+                    writer.writeSVar(encodeCoord(donut.x));
+                    writer.writeSVar(encodeCoord(donut.y));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
                 }
-                if (flags & IMAGE_FLAG_ROTATION) writer.writeSVar(Math.round(icon.rotation));
-                if (flags & IMAGE_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
-                if (flags & 0x10) writer.writeUVar(Math.round(icon.iconId ?? 0));
-                if (flags & 0x20) writer.writeUVar(Math.round(icon.maxStacks ?? 0));
-                if (flags & 0x40) writer.writeUVar(Math.round(icon.time ?? 0));
-                continue;
+
+                if (type === ObjectType.Eye) {
+                    const eye = obj as unknown as {
+                        color: string;
+                        radius: number;
+                        x: number;
+                        y: number;
+                        invert?: boolean;
+                    };
+                    writer.writeU8(eye.invert ? 1 : 0);
+                    writeColor(writer, eye.color);
+                    writer.writeUVar(Math.round(eye.radius));
+                    writer.writeSVar(encodeCoord(eye.x));
+                    writer.writeSVar(encodeCoord(eye.y));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
+                }
+
+                if (type === ObjectType.Stack || type === ObjectType.Tower) {
+                    const stack = obj as unknown as {
+                        color: string;
+                        radius: number;
+                        count: number;
+                        x: number;
+                        y: number;
+                    };
+                    writeColor(writer, stack.color);
+                    writer.writeUVar(Math.round(stack.radius));
+                    writer.writeUVar(Math.round(stack.count));
+                    writer.writeSVar(encodeCoord(stack.x));
+                    writer.writeSVar(encodeCoord(stack.y));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
+                }
+
+                if (type === ObjectType.Line) {
+                    const line = obj as unknown as {
+                        color: string;
+                        length: number;
+                        width: number;
+                        x: number;
+                        y: number;
+                        rotation: number;
+                    };
+                    writeColor(writer, line.color);
+                    writer.writeUVar(Math.round(line.length));
+                    writer.writeUVar(Math.round(line.width));
+                    writer.writeSVar(encodeCoord(line.x));
+                    writer.writeSVar(encodeCoord(line.y));
+                    if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
+                }
+
+                if (type === ObjectType.Cone) {
+                    const cone = obj as unknown as {
+                        color: string;
+                        radius: number;
+                        coneAngle: number;
+                        x: number;
+                        y: number;
+                        rotation: number;
+                    };
+                    writeColor(writer, cone.color);
+                    writer.writeUVar(Math.round(cone.radius));
+                    writer.writeUVar(Math.round(cone.coneAngle));
+                    writer.writeSVar(encodeCoord(cone.x));
+                    writer.writeSVar(encodeCoord(cone.y));
+                    if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
+                }
+
+                if (type === ObjectType.Arc) {
+                    const arc = obj as unknown as {
+                        color: string;
+                        radius: number;
+                        innerRadius: number;
+                        coneAngle: number;
+                        x: number;
+                        y: number;
+                        rotation: number;
+                    };
+                    writeColor(writer, arc.color);
+                    writer.writeUVar(Math.round(arc.radius));
+                    writer.writeUVar(Math.round(arc.innerRadius));
+                    writer.writeUVar(Math.round(arc.coneAngle));
+                    writer.writeSVar(encodeCoord(arc.x));
+                    writer.writeSVar(encodeCoord(arc.y));
+                    if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
+                }
+
+                if (
+                    type === ObjectType.Rect ||
+                    type === ObjectType.LineStack ||
+                    type === ObjectType.LineKnockback ||
+                    type === ObjectType.LineKnockAway ||
+                    type === ObjectType.Triangle ||
+                    type === ObjectType.RightTriangle
+                ) {
+                    const rect = obj as unknown as {
+                        color: string;
+                        width: number;
+                        height: number;
+                        x: number;
+                        y: number;
+                        rotation: number;
+                    };
+                    writeColor(writer, rect.color);
+                    writer.writeUVar(Math.round(rect.width));
+                    writer.writeUVar(Math.round(rect.height));
+                    writer.writeSVar(encodeCoord(rect.x));
+                    writer.writeSVar(encodeCoord(rect.y));
+                    if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
+                }
+
+                if (type === ObjectType.Polygon) {
+                    const poly = obj as unknown as {
+                        color: string;
+                        radius: number;
+                        sides: number;
+                        orient?: string;
+                        x: number;
+                        y: number;
+                        rotation: number;
+                    };
+                    const orient = poly.orient ?? 'point';
+                    const orientCode = orient === 'side' ? 1 : 0;
+                    writer.writeU8(orientCode);
+                    writeColor(writer, poly.color);
+                    writer.writeUVar(Math.round(poly.radius));
+                    writer.writeUVar(Math.round(poly.sides));
+                    writer.writeSVar(encodeCoord(poly.x));
+                    writer.writeSVar(encodeCoord(poly.y));
+                    if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
+                }
+
+                if (type === ObjectType.Exaflare) {
+                    const exa = obj as unknown as {
+                        color: string;
+                        radius: number;
+                        length: number;
+                        spacing: number;
+                        x: number;
+                        y: number;
+                        rotation: number;
+                    };
+                    writeColor(writer, exa.color);
+                    writer.writeUVar(Math.round(exa.radius));
+                    writer.writeUVar(Math.round(exa.length));
+                    writer.writeUVar(Math.round(exa.spacing));
+                    writer.writeSVar(encodeCoord(exa.x));
+                    writer.writeSVar(encodeCoord(exa.y));
+                    if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
+                }
+
+                if (type === ObjectType.Starburst) {
+                    const star = obj as unknown as {
+                        color: string;
+                        radius: number;
+                        spokes: number;
+                        spokeWidth: number;
+                        x: number;
+                        y: number;
+                        rotation: number;
+                    };
+                    writeColor(writer, star.color);
+                    writer.writeUVar(Math.round(star.radius));
+                    writer.writeUVar(Math.round(star.spokes));
+                    writer.writeUVar(Math.round(star.spokeWidth));
+                    writer.writeSVar(encodeCoord(star.x));
+                    writer.writeSVar(encodeCoord(star.y));
+                    if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
+                }
+
+                if (type === ObjectType.Cursor) {
+                    // Minimal cursor object
+                    writer.writeSVar(encodeCoord(moveable.x ?? 0));
+                    writer.writeSVar(encodeCoord(moveable.y ?? 0));
+                    if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
+                    continue;
+                }
+
+                throw new Error(`Unsupported object type: "${type}"`);
             }
-
-            if (type === ObjectType.Arrow) {
-                const arrow = obj as unknown as {
-                    color: string;
-                    x: number;
-                    y: number;
-                    width: number;
-                    height: number;
-                    rotation: number;
-                    opacity?: number;
-                    arrowBegin?: boolean;
-                    arrowEnd?: boolean;
-                };
-
-                if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= ARROW_FLAG_OPACITY;
-                if (arrow.rotation !== 0) flags |= ARROW_FLAG_ROTATION;
-                if (arrow.arrowEnd) flags |= ARROW_FLAG_END;
-                if (arrow.arrowBegin) flags |= ARROW_FLAG_BEGIN;
-
-                writer.writeUVar(flags);
-                writeColor(writer, arrow.color);
-                writer.writeUVar(Math.round(arrow.width));
-                writer.writeUVar(Math.round(arrow.height));
-                writer.writeSVar(encodeCoord(arrow.x));
-                writer.writeSVar(encodeCoord(arrow.y));
-                if (flags & ARROW_FLAG_ROTATION) writer.writeSVar(Math.round(arrow.rotation));
-                if (flags & ARROW_FLAG_OPACITY) writer.writeUVar(Math.round(opacity));
-                continue;
-            }
-
-            if (type === ObjectType.Draw) {
-                const draw = obj as unknown as DrawObject;
-                // Draw objects contain floats; encode them losslessly as float32.
-                if (opacity !== DEFAULT_OPACITY_IMAGE) flags |= 0x01;
-                if (draw.rotation !== 0) flags |= 0x02;
-
-                writer.writeUVar(flags);
-                writeColor(writer, draw.color);
-                writer.writeF32(draw.x);
-                writer.writeF32(draw.y);
-                writer.writeF32(draw.width);
-                writer.writeF32(draw.height);
-                if (flags & 0x02) writer.writeF32(draw.rotation);
-                writer.writeUVar(draw.points.length);
-                for (const p of draw.points) writer.writeF32(p);
-                writer.writeUVar(Math.round(draw.brushSize));
-                if (flags & 0x01) writer.writeUVar(Math.round(opacity));
-                continue;
-            }
-
-            // Zones and other objects
-            const moveable = obj as unknown as { x?: number; y?: number };
-            const rotateable = obj as unknown as { rotation?: number };
-
-            const hollow = !!(obj as unknown as { hollow?: boolean }).hollow;
-            const rotation = rotateable.rotation ?? 0;
-            const opacityInt = Math.round(opacity);
-
-            const isV2 = version === CODEC_VERSION_V2;
-            const zoneOpacityCode = isV2 ? getZoneOpacityCodeV2(opacityInt, defaultOpacity) : 0;
-            const shouldWriteZoneOpacity = isV2 ? zoneOpacityCode === ZONE_V2_OPACITY_CUSTOM : opacityInt !== defaultOpacity;
-            const shouldWriteZoneRotation = rotation !== 0;
-
-            if (hollow) flags |= ZONE_FLAG_HOLLOW;
-            if (isV2) {
-                flags |= (zoneOpacityCode & 0x07) << ZONE_V2_OPACITY_SHIFT;
-                if (shouldWriteZoneRotation) flags |= ZONE_V2_FLAG_ROTATION;
-            } else {
-                if (opacityInt !== defaultOpacity) flags |= ZONE_FLAG_OPACITY;
-                if (shouldWriteZoneRotation) flags |= ZONE_FLAG_ROTATION;
-            }
-
-            writer.writeUVar(flags);
-
-            if (
-                type === ObjectType.Circle ||
-                type === ObjectType.Proximity ||
-                type === ObjectType.Knockback ||
-                type === ObjectType.RotateCW ||
-                type === ObjectType.RotateCCW
-            ) {
-                const circle = obj as unknown as { color: string; radius: number; x: number; y: number };
-                writeColor(writer, circle.color);
-                writer.writeUVar(Math.round(circle.radius));
-                writer.writeSVar(encodeCoord(circle.x));
-                writer.writeSVar(encodeCoord(circle.y));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (type === ObjectType.Donut) {
-                const donut = obj as unknown as { color: string; radius: number; innerRadius: number; x: number; y: number };
-                writeColor(writer, donut.color);
-                writer.writeUVar(Math.round(donut.radius));
-                writer.writeUVar(Math.round(donut.innerRadius));
-                writer.writeSVar(encodeCoord(donut.x));
-                writer.writeSVar(encodeCoord(donut.y));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (type === ObjectType.Eye) {
-                const eye = obj as unknown as { color: string; radius: number; x: number; y: number; invert?: boolean };
-                writer.writeU8(eye.invert ? 1 : 0);
-                writeColor(writer, eye.color);
-                writer.writeUVar(Math.round(eye.radius));
-                writer.writeSVar(encodeCoord(eye.x));
-                writer.writeSVar(encodeCoord(eye.y));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (type === ObjectType.Stack || type === ObjectType.Tower) {
-                const stack = obj as unknown as { color: string; radius: number; count: number; x: number; y: number };
-                writeColor(writer, stack.color);
-                writer.writeUVar(Math.round(stack.radius));
-                writer.writeUVar(Math.round(stack.count));
-                writer.writeSVar(encodeCoord(stack.x));
-                writer.writeSVar(encodeCoord(stack.y));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (type === ObjectType.Line) {
-                const line = obj as unknown as { color: string; length: number; width: number; x: number; y: number; rotation: number };
-                writeColor(writer, line.color);
-                writer.writeUVar(Math.round(line.length));
-                writer.writeUVar(Math.round(line.width));
-                writer.writeSVar(encodeCoord(line.x));
-                writer.writeSVar(encodeCoord(line.y));
-                if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (type === ObjectType.Cone) {
-                const cone = obj as unknown as { color: string; radius: number; coneAngle: number; x: number; y: number; rotation: number };
-                writeColor(writer, cone.color);
-                writer.writeUVar(Math.round(cone.radius));
-                writer.writeUVar(Math.round(cone.coneAngle));
-                writer.writeSVar(encodeCoord(cone.x));
-                writer.writeSVar(encodeCoord(cone.y));
-                if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (type === ObjectType.Arc) {
-                const arc = obj as unknown as {
-                    color: string;
-                    radius: number;
-                    innerRadius: number;
-                    coneAngle: number;
-                    x: number;
-                    y: number;
-                    rotation: number;
-                };
-                writeColor(writer, arc.color);
-                writer.writeUVar(Math.round(arc.radius));
-                writer.writeUVar(Math.round(arc.innerRadius));
-                writer.writeUVar(Math.round(arc.coneAngle));
-                writer.writeSVar(encodeCoord(arc.x));
-                writer.writeSVar(encodeCoord(arc.y));
-                if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (
-                type === ObjectType.Rect ||
-                type === ObjectType.LineStack ||
-                type === ObjectType.LineKnockback ||
-                type === ObjectType.LineKnockAway ||
-                type === ObjectType.Triangle ||
-                type === ObjectType.RightTriangle
-            ) {
-                const rect = obj as unknown as { color: string; width: number; height: number; x: number; y: number; rotation: number };
-                writeColor(writer, rect.color);
-                writer.writeUVar(Math.round(rect.width));
-                writer.writeUVar(Math.round(rect.height));
-                writer.writeSVar(encodeCoord(rect.x));
-                writer.writeSVar(encodeCoord(rect.y));
-                if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (type === ObjectType.Polygon) {
-                const poly = obj as unknown as {
-                    color: string;
-                    radius: number;
-                    sides: number;
-                    orient?: string;
-                    x: number;
-                    y: number;
-                    rotation: number;
-                };
-                const orient = poly.orient ?? 'point';
-                const orientCode = orient === 'side' ? 1 : 0;
-                writer.writeU8(orientCode);
-                writeColor(writer, poly.color);
-                writer.writeUVar(Math.round(poly.radius));
-                writer.writeUVar(Math.round(poly.sides));
-                writer.writeSVar(encodeCoord(poly.x));
-                writer.writeSVar(encodeCoord(poly.y));
-                if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (type === ObjectType.Exaflare) {
-                const exa = obj as unknown as {
-                    color: string;
-                    radius: number;
-                    length: number;
-                    spacing: number;
-                    x: number;
-                    y: number;
-                    rotation: number;
-                };
-                writeColor(writer, exa.color);
-                writer.writeUVar(Math.round(exa.radius));
-                writer.writeUVar(Math.round(exa.length));
-                writer.writeUVar(Math.round(exa.spacing));
-                writer.writeSVar(encodeCoord(exa.x));
-                writer.writeSVar(encodeCoord(exa.y));
-                if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (type === ObjectType.Starburst) {
-                const star = obj as unknown as {
-                    color: string;
-                    radius: number;
-                    spokes: number;
-                    spokeWidth: number;
-                    x: number;
-                    y: number;
-                    rotation: number;
-                };
-                writeColor(writer, star.color);
-                writer.writeUVar(Math.round(star.radius));
-                writer.writeUVar(Math.round(star.spokes));
-                writer.writeUVar(Math.round(star.spokeWidth));
-                writer.writeSVar(encodeCoord(star.x));
-                writer.writeSVar(encodeCoord(star.y));
-                if (shouldWriteZoneRotation) writer.writeSVar(Math.round(rotation));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            if (type === ObjectType.Cursor) {
-                // Minimal cursor object
-                writer.writeSVar(encodeCoord(moveable.x ?? 0));
-                writer.writeSVar(encodeCoord(moveable.y ?? 0));
-                if (shouldWriteZoneOpacity) writer.writeUVar(opacityInt);
-                continue;
-            }
-
-            throw new Error(`Unsupported object type: "${type}"`);
         }
-    }
     }
 
     return writer.toUint8Array();
@@ -1979,8 +2062,7 @@ export function decodeSceneBinary(data: Uint8Array): Scene {
 
     // Arena
     const shapeCode = reader.readU8();
-    const arenaShape =
-        shapeCode === 1 ? ArenaShape.Rectangle : shapeCode === 2 ? ArenaShape.Circle : ArenaShape.None;
+    const arenaShape = shapeCode === 1 ? ArenaShape.Rectangle : shapeCode === 2 ? ArenaShape.Circle : ArenaShape.None;
     const arenaWidth = reader.readUVar();
     const arenaHeight = reader.readUVar();
     const arenaPadding = reader.readUVar();
@@ -2233,7 +2315,8 @@ export function decodeSceneBinary(data: Uint8Array): Scene {
             const width = reader.readUVar();
             const height = reader.readUVar();
             const rotation = reader.readSVar();
-            const shape = flags & MARKER_FLAG_SHAPE ? (reader.readU8() === 1 ? 'square' : 'circle') : DEFAULT_MARKER_SHAPE;
+            const shape =
+                flags & MARKER_FLAG_SHAPE ? (reader.readU8() === 1 ? 'square' : 'circle') : DEFAULT_MARKER_SHAPE;
             const color = readColor(reader);
             const opacity = flags & MARKER_FLAG_OPACITY ? reader.readUVar() : DEFAULT_OPACITY_IMAGE;
 

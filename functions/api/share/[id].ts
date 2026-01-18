@@ -20,4 +20,3 @@ export const onRequestGet: PagesFunction<Env> = async ({ env, params }) => {
         },
     });
 };
-

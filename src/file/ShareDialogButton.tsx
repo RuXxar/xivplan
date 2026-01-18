@@ -118,7 +118,12 @@ const ShareDialogBody: React.FC = () => {
                     validationState={mode === 'hosted' && hostedError ? 'error' : 'none'}
                     validationMessage={mode === 'hosted' ? hostedError : undefined}
                 >
-                    <Textarea value={mode === 'hosted' ? hostedUrl : url} contentEditable={false} appearance="filled-darker" rows={6} />
+                    <Textarea
+                        value={mode === 'hosted' ? hostedUrl : url}
+                        contentEditable={false}
+                        appearance="filled-darker"
+                        rows={6}
+                    />
                 </Field>
                 <p>
                     If your browser won&apos;t open the link, paste the text into{' '}
@@ -135,7 +140,12 @@ const ShareDialogBody: React.FC = () => {
                     </Button>
                 )}
 
-                <Button appearance="primary" icon={<CopyRegular />} disabled={mode === 'hosted' ? !hostedUrl : !url} onClick={copyToClipboard}>
+                <Button
+                    appearance="primary"
+                    icon={<CopyRegular />}
+                    disabled={mode === 'hosted' ? !hostedUrl : !url}
+                    onClick={copyToClipboard}
+                >
                     Copy to clipboard
                 </Button>
 

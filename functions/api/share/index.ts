@@ -66,4 +66,3 @@ export const onRequestPost: PagesFunction<Env> = async ({ env, request }) => {
 
     return jsonResponse({ id });
 };
-

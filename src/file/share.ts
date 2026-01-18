@@ -51,8 +51,8 @@ function getPlanData(hash: string, searchParams?: URLSearchParams): string | und
         return decodeURIComponent(hash.substring(1));
     }
 
-    // Previously, links were formatted as /?path=<data>
-    const data = searchParams?.get('plan');
+    // Previously, links were formatted as /?plan=<data> or /?path=<data>
+    const data = searchParams?.get('plan') ?? searchParams?.get('path');
     if (data) {
         return data;
     }
