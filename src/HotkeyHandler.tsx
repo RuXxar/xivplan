@@ -322,22 +322,94 @@ const EditActionHandler: React.FC = () => {
     const { scene, step, dispatch } = useScene();
     const [editMode] = useEditMode();
 
+    const shouldIgnoreArrowKey = (e: KeyboardEvent) => {
+        const target = e.target;
+        if (!(target instanceof HTMLElement)) {
+            return false;
+        }
+
+        // Don't steal arrow keys from Fluent UI TabLists (they use arrow keys for keyboard navigation).
+        return target.closest('[role="tablist"], [role="tab"]') !== null;
+    };
+
     const moveCallback = (offset: Partial<Vector2d>) => (e: KeyboardEvent) => {
         if (editMode !== EditMode.Normal) {
+            return;
+        }
+        if (shouldIgnoreArrowKey(e)) {
+            return;
+        }
+        if (selection.size === 0) {
             return;
         }
 
         const selectedObjects = getSelectedObjects(step, selection);
         const value = moveObjectsBy(selectedObjects, offset);
 
+        if (value.length === 0) {
+            return;
+        }
         dispatch({ type: 'update', value });
         e.preventDefault();
     };
 
     useHotkeys('up', {}, moveCallback({ y: DEFAULT_MOVE_OFFSET }), [moveCallback]);
     useHotkeys('down', {}, moveCallback({ y: -DEFAULT_MOVE_OFFSET }), [moveCallback]);
-    useHotkeys('left', {}, moveCallback({ x: -DEFAULT_MOVE_OFFSET }), [moveCallback]);
-    useHotkeys('right', {}, moveCallback({ x: DEFAULT_MOVE_OFFSET }), [moveCallback]);
+
+    useHotkeys(
+        'left',
+        {},
+        (e) => {
+            if (editMode !== EditMode.Normal) {
+                return;
+            }
+            if (shouldIgnoreArrowKey(e)) {
+                return;
+            }
+
+            if (selection.size === 0) {
+                dispatch({ type: 'previousStep' });
+                e.preventDefault();
+                return;
+            }
+
+            const value = moveObjectsBy(getSelectedObjects(step, selection), { x: -DEFAULT_MOVE_OFFSET });
+            if (value.length === 0) {
+                return;
+            }
+
+            dispatch({ type: 'update', value });
+            e.preventDefault();
+        },
+        [editMode, selection, step, dispatch],
+    );
+    useHotkeys(
+        'right',
+        {},
+        (e) => {
+            if (editMode !== EditMode.Normal) {
+                return;
+            }
+            if (shouldIgnoreArrowKey(e)) {
+                return;
+            }
+
+            if (selection.size === 0) {
+                dispatch({ type: 'nextStep' });
+                e.preventDefault();
+                return;
+            }
+
+            const value = moveObjectsBy(getSelectedObjects(step, selection), { x: DEFAULT_MOVE_OFFSET });
+            if (value.length === 0) {
+                return;
+            }
+
+            dispatch({ type: 'update', value });
+            e.preventDefault();
+        },
+        [editMode, selection, step, dispatch],
+    );
 
     useHotkeys('ctrl+up', {}, moveCallback({ y: LARGE_MOVE_OFFSET }), [moveCallback]);
     useHotkeys('ctrl+down', {}, moveCallback({ y: -LARGE_MOVE_OFFSET }), [moveCallback]);
@@ -424,6 +496,8 @@ const DrawModeHandler: React.FC = () => {
 
 const StepHandler: React.FC = () => {
     const { dispatch } = useScene();
+
+    useHotkeyHelp({ keys: '🡐🡒', category: CATEGORY_STEPS, help: 'Previous/next step (when nothing selected)' });
 
     useHotkeys(
         'alt+left',
